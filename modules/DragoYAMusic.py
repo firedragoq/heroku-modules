@@ -1,8 +1,8 @@
-__version__ = (2, 18, 1)
+__version__ = (2, 18, 2)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# changelog: карточка выводится сразу одним сообщением, без мигания и лишних кнопок
+# changelog: длинные название/артист авто-уменьшаются и не вылезают за рамки баннера
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
 
@@ -176,8 +176,6 @@ class FiredBanner:
 
         small_font = self._font(36)
         meta_font = self._font(39)
-        title_font = self._font(86, bold=True)
-        artist_font = self._font(54, bold=True)
         album_font = self._font(39)
 
         self._brand(draw, content_x, y, accent)
@@ -186,18 +184,26 @@ class FiredBanner:
         y += 110
         self._plain_svg(draw, content_x, y + 28, "title", 38, accent)
         text_x = content_x + 62
-        text_w = content_w - 62
-        title_lines = self._wrap(self.title, title_font, text_w, max_lines=2)
+        # правый отступ, чтобы текст не упирался в рамку карточки
+        text_w = content_w - 62 - 28
+        # авто-подбор размера шрифта, чтобы заголовок не вылезал за рамки
+        title_font, title_lines = self._fit_font(
+            self.title, text_w, max_lines=2, start_size=86, min_size=44, bold=True
+        )
+        title_lh = int(title_font.size * 1.12)
         for line in title_lines:
             self._shadow_text(draw, (text_x, y), line, title_font, (255, 255, 255, 255))
-            y += 96
+            y += title_lh
 
         y += 6
         self._plain_svg(draw, content_x, y + 12, "artist", 36, accent)
-        artist_lines = self._wrap(self.artist, artist_font, text_w, max_lines=2)
+        artist_font, artist_lines = self._fit_font(
+            self.artist, text_w, max_lines=2, start_size=54, min_size=34, bold=True
+        )
+        artist_lh = int(artist_font.size * 1.18)
         for line in artist_lines:
             self._shadow_text(draw, (text_x, y), line, artist_font, (238, 244, 255, 245))
-            y += 64
+            y += artist_lh
 
         y += 22
         album = self._fit(self.album, album_font, content_w - 58)
@@ -369,6 +375,45 @@ class FiredBanner:
         if len(lines) == max_lines:
             lines[-1] = self._fit(lines[-1], font, max_width)
         return lines or [self._fit(text, font, max_width)]
+
+    def _wrap_all(
+        self, text: str, font: ImageFont.ImageFont, max_width: int
+    ) -> List[str]:
+        """Перенос без ограничения числа строк (для авто-подбора шрифта)."""
+        lines: List[str] = []
+        current = ""
+        for word in (text.split() or [text]):
+            candidate = f"{current} {word}".strip()
+            if not current or self._text_w(candidate, font) <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [text]
+
+    def _fit_font(
+        self,
+        text: str,
+        max_width: int,
+        max_lines: int,
+        start_size: int,
+        min_size: int,
+        bold: bool = False,
+    ) -> Tuple[ImageFont.ImageFont, List[str]]:
+        """Подбирает размер шрифта, чтобы текст уместился в max_lines строк."""
+        size = start_size
+        while size > min_size:
+            font = self._font(size, bold=bold)
+            lines = self._wrap_all(text, font, max_width)
+            if len(lines) <= max_lines and all(
+                self._text_w(ln, font) <= max_width for ln in lines
+            ):
+                return font, lines
+            size -= 4
+        font = self._font(min_size, bold=bold)
+        return font, self._wrap(text, font, max_width, max_lines)
 
     def _brand(
         self,
