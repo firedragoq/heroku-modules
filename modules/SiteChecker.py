@@ -1,5 +1,5 @@
-__version__ = (2, 1, 1)
-# changelog: фикс краша .cfg из-за примера эмодзи в описании настроек
+__version__ = (2, 1, 2)
+# changelog: иконка звоночка теперь настраиваемая (премиум-эмодзи)
 
 # meta developer: @dragomodules
 # scope: heroku_only
@@ -136,6 +136,12 @@ class SiteCheckerMod(loader.Module):
                 "emoji_site",
                 "🌐",
                 "Иконка сайта/заголовка. Можно премиум-эмодзи.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_bell",
+                "🔔",
+                "Иконка звоночка (строка мониторинга). Можно премиум-эмодзи.",
                 validator=loader.validators.String(),
             ),
         )
@@ -295,7 +301,8 @@ class SiteCheckerMod(loader.Module):
         await utils.answer(
             message,
             self.strings("list_title").format(site=self.config["emoji_site"], n=len(sites))
-            + f"\n🔔 Мониторинг: {mon} · каждые {self.config['check_interval']} мин\n\n"
+            + f"\n{self.config['emoji_bell']} Мониторинг: {mon} · "
+            + f"каждые {self.config['check_interval']} мин\n\n"
             + "\n".join(rows),
         )
 
