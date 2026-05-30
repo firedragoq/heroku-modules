@@ -1,9 +1,9 @@
-__version__ = (1, 2, 1)
+__version__ = (1, 2, 2)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: psutil pillow
-# changelog: фикс — картинка .fetchimg больше не исчезает
+# changelog: фикс отправки картинки .fetchimg (response=/file= как в DragoYAMusic)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoFetch — красивая системная инфа (fastfetch/neofetch)     ║
@@ -398,22 +398,21 @@ class DragoFetchMod(loader.Module):
             return await utils.answer(
                 message, "🚫 <b>Pillow не установлен.</b> Используй <code>.fetch</code>."
             )
-        msg = await utils.answer(message, self.strings("loading"))
+        await utils.answer(message, self.strings("loading"))
         try:
             tool, rows = await self._collect_tool()
             if not rows:
                 rows = self._builtin_rows()
             img = self._render_image(tool, rows)
-            # заменяем loading-сообщение на картинку (одно сообщение, без мигания)
-            await utils.answer(
-                msg,
+            caption = (
                 f"{self.config['title_emoji']} <b>Система</b> · "
-                f"<code>{escape(platform.uname().node)}</code>",
-                file=img,
+                f"<code>{escape(platform.uname().node)}</code>"
             )
+            # как в DragoYAMusic: исходное message + response=/file= (без позиционного текста)
+            await utils.answer(message=message, response=caption, file=img)
         except Exception as exc:  # noqa: BLE001
             logger.exception("fetchimg failed: %s", exc)
-            await utils.answer(msg, self.strings("fail").format(escape(str(exc))))
+            await utils.answer(message, self.strings("fail").format(escape(str(exc))))
 
     @loader.command(ru_doc="Топ процессов по CPU и RAM", alias="tp")
     async def topproccmd(self, message):
