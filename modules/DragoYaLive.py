@@ -1,5 +1,5 @@
-__version__ = (2, 1, 2)
-# changelog: фикс краша .cfg из-за примера эмодзи в описании настроек
+__version__ = (2, 2, 0)
+# changelog: обложка трека картинкой, плейсхолдеры {album} и {cover}
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -226,6 +226,12 @@ class DragoYaLiveMod(loader.Module):
                 "Постить без звука (тихие уведомления).",
                 validator=loader.validators.Boolean(),
             ),
+            loader.ConfigValue(
+                "send_cover",
+                True,
+                "Прикреплять обложку трека картинкой к посту.",
+                validator=loader.validators.Boolean(),
+            ),
         )
         self.last_track_id = None
         self.client_ym = None
@@ -271,10 +277,18 @@ class DragoYaLiveMod(loader.Module):
             album_id = (
                 albums[0].id if albums and getattr(albums[0], "id", None) else 0
             )
+            album_name = albums[0].title if albums and getattr(albums[0], "title", None) else ""
+            # обложка трека (cover_uri вида "avatars.../%%")
+            cover_uri = getattr(track_obj, "cover_uri", None)
+            cover = (
+                "https://" + cover_uri.replace("%%", "400x400") if cover_uri else ""
+            )
             url = f"https://music.yandex.ru/album/{album_id}/track/{track_obj.id}"
             return {
                 "title": title,
                 "artists": [a.name for a in artists],
+                "album": album_name,
+                "cover": cover,
                 "url": url,
                 "track_id": track_obj.id,
             }
@@ -289,7 +303,9 @@ class DragoYaLiveMod(loader.Module):
         repls = {
             "{title}": utils.escape_html(track["title"]),
             "{artists}": utils.escape_html(", ".join(track["artists"])),
+            "{album}": utils.escape_html(track.get("album", "")),
             "{url}": track["url"],
+            "{cover}": track.get("cover", ""),
             "{track_id}": str(track["track_id"]),
             "{timestamp}": timestamp,
         }
@@ -297,6 +313,22 @@ class DragoYaLiveMod(loader.Module):
         for key, value in repls.items():
             out = out.replace(key, value)
         return out
+
+    async def _post(self, chat_id: int, track: dict, text: str):
+        """Постит трек: с обложкой (если включено и текст влезает) или текстом."""
+        cover = track.get("cover", "")
+        silent = bool(self.config["send_silent"])
+        if self.config["send_cover"] and cover and len(text) <= 1024:
+            try:
+                await self.client.send_file(
+                    chat_id, cover, caption=text, parse_mode="html", silent=silent
+                )
+                return
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Не удалось отправить с обложкой: {e}")
+        await self.client.send_message(
+            chat_id, text, parse_mode="html", silent=silent
+        )
 
     @loader.loop(interval=30, autostart=True)
     async def autochannel_loop(self):
@@ -313,11 +345,8 @@ class DragoYaLiveMod(loader.Module):
             if track["track_id"] == self.last_track_id:
                 return
             self.last_track_id = track["track_id"]
-            await self.client.send_message(
-                int(self.config["channel_id"]),
-                self._render(track),
-                parse_mode="html",
-                silent=bool(self.config["send_silent"]),
+            await self._post(
+                int(self.config["channel_id"]), track, self._render(track)
             )
         except Exception as e:  # noqa: BLE001
             logger.error(f"Ошибка в autochannel_loop: {e}")
@@ -379,11 +408,8 @@ class DragoYaLiveMod(loader.Module):
             return await call.edit(self.strings("no_channel"))
         try:
             self.last_track_id = track["track_id"]
-            await self.client.send_message(
-                int(self.config["channel_id"]),
-                self._render(track),
-                parse_mode="html",
-                silent=bool(self.config["send_silent"]),
+            await self._post(
+                int(self.config["channel_id"]), track, self._render(track)
             )
             await call.edit("✅ <b>Опубликовано в канал!</b>")
         except Exception as e:  # noqa: BLE001
