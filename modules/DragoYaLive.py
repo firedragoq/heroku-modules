@@ -1,5 +1,5 @@
-__version__ = (2, 1, 1)
-# changelog: превью теперь с премиум-эмодзи (шлётся от аккаунта, не от бота)
+__version__ = (2, 1, 2)
+# changelog: фикс краша .cfg из-за примера эмодзи в описании настроек
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -154,7 +154,7 @@ async def get_current_track(client, token):
 
 
 # Текст по умолчанию. Поддерживает HTML-форматирование и премиум-эмодзи
-# в виде <emoji document_id=ID>🎧</emoji>. Доступные плейсхолдеры:
+# (emoji-тег с числовым document_id). Доступные плейсхолдеры:
 # {title} {artists} {url} {track_id} {timestamp}
 DEFAULT_TEXT = (
     "<emoji document_id=5474304919651491706>🎧</emoji> <b>Сейчас играет</b>\n\n"
@@ -216,7 +216,7 @@ class DragoYaLiveMod(loader.Module):
             loader.ConfigValue(
                 "message_text",
                 DEFAULT_TEXT,
-                "Текст поста. HTML + премиум-эмодзи (<emoji document_id=ID>🎧</emoji>). "
+                "Текст поста. Поддерживает HTML и премиум-эмодзи. "
                 "Плейсхолдеры: {title} {artists} {url} {track_id} {timestamp}",
                 validator=loader.validators.String(),
             ),
