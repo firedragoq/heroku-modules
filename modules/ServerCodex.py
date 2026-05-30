@@ -1,6 +1,6 @@
 __version__ = (1, 0, 0)
 
-# meta developer: @firedragoq
+# meta developer: @dragomodules
 # scope: terminal_access_true
 
 import asyncio
