@@ -1,15 +1,17 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# requires: psutil
+# requires: psutil pillow
+# changelog: вывод карточкой-картинкой (.fetchimg) + топ процессов
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoFetch — красивая системная инфа (fastfetch/neofetch)     ║
-# ║  + живые метрики CPU/RAM/Disk через psutil.                    ║
+# ║  + живые метрики CPU/RAM/Disk через psutil. Можно картинкой.   ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import asyncio
+import io
 import logging
 import platform
 import re
@@ -20,6 +22,15 @@ from html import escape
 import psutil
 
 from .. import loader, utils
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+
+    _PIL = True
+except ImportError:  # noqa: BLE001
+    _PIL = False
+
+_FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +243,110 @@ class DragoFetchMod(loader.Module):
             parts.append(self._metrics_block())
         return "\n".join(parts)
 
+    async def _top_procs(self, n: int = 5) -> tuple[list, list]:
+        """Топ процессов по CPU и по RAM."""
+        procs = list(psutil.process_iter(["name", "memory_percent"]))
+        for p in procs:
+            try:
+                p.cpu_percent(None)
+            except Exception:  # noqa: BLE001
+                pass
+        await asyncio.sleep(0.5)
+        data = []
+        for p in procs:
+            try:
+                data.append(
+                    (
+                        p.info.get("name") or "?",
+                        p.cpu_percent(None),
+                        p.info.get("memory_percent") or 0.0,
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                continue
+        by_cpu = sorted(data, key=lambda x: -x[1])[:n]
+        by_ram = sorted(data, key=lambda x: -x[2])[:n]
+        return by_cpu, by_ram
+
+    # ───────────────────── рендер картинки ─────────────────────
+    def _font(self, name: str, size: int):
+        try:
+            return ImageFont.truetype(_FONT_DIR + name, size)
+        except Exception:  # noqa: BLE001
+            return ImageFont.load_default()
+
+    def _render_image(self, tool: str, rows: list[tuple[str, str]]) -> io.BytesIO:
+        f_title = self._font("DejaVuSans-Bold.ttf", 30)
+        f_key = self._font("DejaVuSansMono-Bold.ttf", 20)
+        f_val = self._font("DejaVuSansMono.ttf", 20)
+
+        pad = 32
+        line_h = 30
+        bar_h = 34
+        W = 860
+        n_bars = 3 if self.config["show_bars"] else 0
+        H = pad + 50 + 14 + len(rows) * line_h + (n_bars * bar_h + 30 if n_bars else 0) + pad
+
+        img = Image.new("RGB", (W, H), (26, 27, 38))
+        d = ImageDraw.Draw(img)
+        # вертикальный градиент фона
+        top, bot = (26, 27, 38), (36, 40, 59)
+        for y in range(H):
+            t = y / H
+            d.line(
+                [(0, y), (W, y)],
+                fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)),
+            )
+
+        accent = (122, 162, 247)
+        key_col = (158, 206, 106)
+        val_col = (192, 202, 245)
+        host = platform.uname().node
+        user = ""
+        try:
+            user = psutil.Process().username().split("\\")[-1]
+        except Exception:  # noqa: BLE001
+            pass
+        title = f"{user}@{host}" if user else host
+        d.text((pad, pad), title, font=f_title, fill=accent)
+        if tool:
+            d.text((pad, pad + 34), tool, font=f_val, fill=(86, 95, 137))
+
+        y = pad + 50 + 14
+        d.line([(pad, y - 8), (W - pad, y - 8)], fill=(60, 64, 82), width=2)
+        for key, value in rows:
+            d.text((pad, y), f"{key}:", font=f_key, fill=key_col)
+            d.text((pad + 200, y), value[:70], font=f_val, fill=val_col)
+            y += line_h
+
+        if n_bars:
+            y += 12
+            cpu = psutil.cpu_percent(interval=0.3)
+            vm = psutil.virtual_memory()
+            du = psutil.disk_usage("/")
+            for label, pct in (("CPU", cpu), ("RAM", vm.percent), ("Disk", du.percent)):
+                d.text((pad, y), label, font=f_key, fill=key_col)
+                bx, bw = pad + 110, W - pad - 110 - 70
+                d.rounded_rectangle([bx, y + 2, bx + bw, y + 20], 6, fill=(40, 42, 54))
+                col = (
+                    (158, 206, 106)
+                    if pct < 60
+                    else (224, 175, 104)
+                    if pct < 85
+                    else (247, 118, 142)
+                )
+                d.rounded_rectangle(
+                    [bx, y + 2, bx + int(bw * pct / 100), y + 20], 6, fill=col
+                )
+                d.text((bx + bw + 12, y), f"{pct:.0f}%", font=f_val, fill=val_col)
+                y += bar_h
+
+        buf = io.BytesIO()
+        buf.name = "dragofetch.png"
+        img.save(buf, "PNG")
+        buf.seek(0)
+        return buf
+
     # ───────────────────── команды ─────────────────────
     @loader.command(ru_doc="Показать системную инфу (карточка)", alias="ff")
     async def fetchcmd(self, message):
@@ -245,6 +360,45 @@ class DragoFetchMod(loader.Module):
         except Exception as exc:  # noqa: BLE001
             logger.exception("fetch failed: %s", exc)
             await utils.answer(msg, self.strings("fail").format(escape(str(exc))))
+
+    @loader.command(ru_doc="Системная инфа карточкой-картинкой", alias="ffi")
+    async def fetchimgcmd(self, message):
+        """System info as an image card"""
+        if not _PIL:
+            return await utils.answer(
+                message, "🚫 <b>Pillow не установлен.</b> Используй <code>.fetch</code>."
+            )
+        msg = await utils.answer(message, self.strings("loading"))
+        try:
+            tool, rows = await self._collect_tool()
+            if not rows:
+                rows = self._builtin_rows()
+            img = self._render_image(tool, rows)
+            await utils.answer(
+                message,
+                f"🖥 <b>Система</b> · <code>{escape(platform.uname().node)}</code>",
+                file=img,
+            )
+            try:
+                await msg.delete()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("fetchimg failed: %s", exc)
+            await utils.answer(msg, self.strings("fail").format(escape(str(exc))))
+
+    @loader.command(ru_doc="Топ процессов по CPU и RAM", alias="tp")
+    async def topproccmd(self, message):
+        """Top processes by CPU and RAM"""
+        msg = await utils.answer(message, "📊 <b>Собираю процессы…</b>")
+        by_cpu, by_ram = await self._top_procs()
+        lines = ["📊 <b>Топ процессов</b>\n", "⚙️ <b>По CPU:</b>"]
+        for name, cpu, _ in by_cpu:
+            lines.append(f"• <code>{escape(name)}</code> — {cpu:.0f}%")
+        lines.append("\n🧠 <b>По RAM:</b>")
+        for name, _, mem in by_ram:
+            lines.append(f"• <code>{escape(name)}</code> — {mem:.1f}%")
+        await utils.answer(msg, "\n".join(lines))
 
     @loader.command(ru_doc="Сырой вывод fastfetch/neofetch", alias="ffr")
     async def fetchrawcmd(self, message):
