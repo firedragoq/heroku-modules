@@ -1,6 +1,6 @@
 __version__ = (2, 17, 0)
 
-# meta developer: @firedragoq
+# meta developer: @dragomodules
 # scope: heroku_only
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
