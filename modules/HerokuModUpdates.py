@@ -1,4 +1,4 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @firedragoq
 # scope: heroku_only
@@ -71,7 +71,7 @@ class HerokuModUpdatesMod(loader.Module):
         self.config = loader.ModuleConfig(
             loader.ConfigValue(
                 "bot_username",
-                "my_modules_bot",
+                "dragomodules_bot",
                 "Юзернейм бота-витрины модулей (без @).",
                 validator=loader.validators.String(),
             ),
