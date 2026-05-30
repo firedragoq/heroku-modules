@@ -1,5 +1,5 @@
-__version__ = (2, 3, 0)
-# changelog: аптайм %, проверка по ключевому слову, алерт на медленный отклик, .sitestats
+__version__ = (2, 4, 0)
+# changelog: индивидуальный интервал проверки на сайт (.siteint)
 
 # meta developer: @dragomodules
 # scope: heroku_only
@@ -237,17 +237,22 @@ class SiteCheckerMod(loader.Module):
         )
 
     # ───────────────────── фоновый мониторинг ─────────────────────
-    @loader.loop(interval=300, autostart=True)
+    @loader.loop(interval=60, autostart=True)
     async def monitor_loop(self):
-        want = int(self.config["check_interval"]) * 60
-        if self.monitor_loop.interval != want:
-            self.monitor_loop.interval = want
+        # тикаем раз в минуту; для каждого сайта смотрим его персональный
+        # интервал (info["interval"]) или глобальный check_interval
         if not self.get("monitoring", False):
             return
         sites = self.get("sites", {})
         if not sites:
             return
+        now = int(time.time())
+        default_int = int(self.config["check_interval"])
         for url, info in sites.items():
+            every = int(info.get("interval") or default_int) * 60
+            if now - info.get("last_check", 0) < every:
+                continue
+            info["last_check"] = now
             res = await self._check(url)
             new_status = "up" if res["ok"] else "down"
             old_status = info.get("status", "unknown")
@@ -345,6 +350,8 @@ class SiteCheckerMod(loader.Module):
                 extra = f" · {utils.escape_html(info.get('error') or '')} · {_ago(info.get('since'))}"
             if info.get("checks"):
                 extra += f" · ↑{self._uptime(info)}"
+            if info.get("interval"):
+                extra += f" · ⏱{info['interval']}м"
             rows.append(f"{i}. {icon} <b>{utils.escape_html(_host(url))}</b>{extra}")
         mon = "🟢 вкл" if self.get("monitoring", False) else "🔴 выкл"
         await utils.answer(
@@ -399,6 +406,48 @@ class SiteCheckerMod(loader.Module):
             )
         else:
             await utils.answer(message, self.strings("mon_off"))
+
+    @loader.command(ru_doc="<url|номер> <мин> — свой интервал для сайта (0=общий)", alias="sci")
+    async def siteintcmd(self, message):
+        """<url|index> <min> — per-site check interval (0 = global)"""
+        args = utils.get_args_raw(message).split()
+        sites = self.get("sites", {})
+        if not sites:
+            return await utils.answer(message, self.strings("empty").format(self.get_prefix()))
+        if len(args) < 2 or not args[-1].isdigit():
+            return await utils.answer(
+                message,
+                "⚠️ <b>Формат:</b> <code>{p}siteint &lt;url|номер&gt; &lt;минуты&gt;</code>\n"
+                "0 = использовать общий интервал.".format(p=self.get_prefix()),
+            )
+        minutes = int(args[-1])
+        ident = " ".join(args[:-1]).strip()
+        target = None
+        if ident.isdigit():
+            keys = list(sites)
+            idx = int(ident) - 1
+            if 0 <= idx < len(keys):
+                target = keys[idx]
+        else:
+            cand = _norm(ident)
+            if cand in sites:
+                target = cand
+        if not target:
+            return await utils.answer(message, self.strings("not_found"))
+        sites[target]["interval"] = minutes
+        self.set("sites", sites)
+        if minutes:
+            await utils.answer(
+                message,
+                f"⏱ <b>{utils.escape_html(_host(target))}</b> — интервал "
+                f"<b>{minutes} мин</b>.",
+            )
+        else:
+            await utils.answer(
+                message,
+                f"⏱ <b>{utils.escape_html(_host(target))}</b> — общий интервал "
+                f"({self.config['check_interval']} мин).",
+            )
 
     @loader.command(ru_doc="Статистика аптайма по сайтам", alias="scs")
     async def sitestatscmd(self, message):
