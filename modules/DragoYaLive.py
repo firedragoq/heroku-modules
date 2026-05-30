@@ -1,5 +1,5 @@
-__version__ = (2, 3, 0)
-# changelog: прогресс-бар трека и плейсхолдеры {duration} {progress} {bar}
+__version__ = (2, 3, 1)
+# changelog: обложка отправляется картинкой, а не файлом
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -12,6 +12,7 @@ __version__ = (2, 3, 0)
 # ╚══════════════════════════════════════════════════════════════╝
 
 import asyncio
+import io
 import json
 import logging
 import random
@@ -347,8 +348,21 @@ class DragoYaLiveMod(loader.Module):
         silent = bool(self.config["send_silent"])
         if self.config["send_cover"] and cover and len(text) <= 1024:
             try:
+                # скачиваем обложку в память с именем .jpg, иначе Telegram
+                # отправит URL без расширения как файл, а не как фото
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(cover) as resp:
+                        resp.raise_for_status()
+                        data = await resp.read()
+                img = io.BytesIO(data)
+                img.name = "cover.jpg"
                 await self.client.send_file(
-                    chat_id, cover, caption=text, parse_mode="html", silent=silent
+                    chat_id,
+                    img,
+                    caption=text,
+                    parse_mode="html",
+                    silent=silent,
+                    force_document=False,
                 )
                 return
             except Exception as e:  # noqa: BLE001
