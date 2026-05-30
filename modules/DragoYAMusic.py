@@ -1,8 +1,8 @@
-__version__ = (2, 18, 0)
+__version__ = (2, 18, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# changelog: инлайн-кнопки управления (❤️/💔/📥) под карточкой, премиум-эмодзи сохранены
+# changelog: карточка выводится сразу одним сообщением, без мигания и лишних кнопок
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
 
@@ -1142,12 +1142,6 @@ class DragoYAMusicMod(loader.Module):
                 validator=loader.validators.Boolean(),
             ),
             loader.ConfigValue(
-                "inline_controls",
-                True,
-                "Показывать инлайн-кнопки управления (❤️/💔/📥) под карточкой .dyan",
-                validator=loader.validators.Boolean(),
-            ),
-            loader.ConfigValue(
                 "queue_fallback",
                 True,
                 "Use the latest Yandex Music queue when Ynison state is empty",
@@ -2009,91 +2003,12 @@ class DragoYAMusicMod(loader.Module):
 
         text = await self._render_text(now)
         if not self.config["send_banner"]:
-            await utils.answer(message, text)
-            await self._send_controls(message, now)
-            return
+            return await utils.answer(message, text)
 
-        try:
-            await utils.answer(message, text + "\n\n" + self.strings("uploading_banner"))
-        except Exception:
-            pass
-
+        # сразу рендерим баннер и отправляем одним финальным сообщением,
+        # без промежуточного показа текста (чтобы не мигало)
         banner = await self._render_banner(now)
         await utils.answer(message=message, response=text, file=banner)
-        await self._send_controls(message, now)
-
-    async def _send_controls(self, message, now):
-        """Инлайн-кнопки управления под карточкой (отдельным сообщением от бота).
-
-        Карточка/баннер выше отправлены аккаунтом — премиум-эмодзи в них
-        сохраняются. Кнопки же может дать только бот, поэтому это отдельное
-        сообщение без премиум-эмодзи в тексте.
-        """
-        if not self.config["inline_controls"]:
-            return
-        if not getattr(self, "inline", None):
-            return
-        chat_id = utils.get_chat_id(message)
-        tid = str(now["track_id"])
-        title = now.get("title", "")
-        artist = now.get("artist", "")
-        markup = [
-            [
-                {"text": "❤️", "callback": self._cb_like, "args": (tid,)},
-                {"text": "💔", "callback": self._cb_dislike, "args": (tid,)},
-                {
-                    "text": "📥 Скачать",
-                    "callback": self._cb_download,
-                    "args": (tid, str(chat_id), title, artist),
-                },
-            ]
-        ]
-        try:
-            await self.inline.form(
-                message=message,
-                text="🎛 <b>Управление треком</b>",
-                reply_markup=markup,
-                silent=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("inline controls failed: %s", exc)
-
-    async def _cb_like(self, call, track_id):
-        ym = await self._get_ym_client()
-        if not ym:
-            return await call.answer("Нет токена", alert=True)
-        try:
-            await ym.users_likes_tracks_add(track_id)
-            await call.answer("❤️ Лайк добавлен")
-        except Exception as exc:  # noqa: BLE001
-            await call.answer(f"Ошибка: {exc}", alert=True)
-
-    async def _cb_dislike(self, call, track_id):
-        ym = await self._get_ym_client()
-        if not ym:
-            return await call.answer("Нет токена", alert=True)
-        try:
-            await ym.users_dislikes_tracks_add(track_id)
-            await call.answer("💔 Дизлайк добавлен")
-        except Exception as exc:  # noqa: BLE001
-            await call.answer(f"Ошибка: {exc}", alert=True)
-
-    async def _cb_download(self, call, track_id, chat_id, title, artist):
-        await call.answer("📥 Скачиваю…")
-        ym = await self._get_ym_client()
-        audio = await self._download_track(ym, track_id) if ym else None
-        if not audio:
-            return await call.answer("Не удалось скачать", alert=True)
-        name = "".join(c for c in f"{artist} - {title}" if c not in r'\/:*?"<>|').strip()
-        audio.name = f"{name or track_id}.mp3"
-        try:
-            await self._client.send_file(
-                int(chat_id),
-                audio,
-                caption=f"🎵 {html.escape(artist)} — {html.escape(title)}",
-            )
-        except Exception as exc:  # noqa: BLE001
-            await call.answer(f"Ошибка отправки: {exc}", alert=True)
 
     @loader.command(
         ru_doc="Отправить ссылку на текущий трек",
