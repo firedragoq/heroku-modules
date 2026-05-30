@@ -1,4 +1,5 @@
-__version__ = (2, 1, 0)
+__version__ = (2, 1, 1)
+# changelog: превью теперь с премиум-эмодзи (шлётся от аккаунта, не от бота)
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -351,9 +352,17 @@ class DragoYaLiveMod(loader.Module):
         track = await self._get_track()
         if not track:
             return await utils.answer(message, self.strings("nothing"))
+        # Само превью шлём от аккаунта (premium) — так рендерятся премиум-эмодзи,
+        # ровно как будет выглядеть пост в канале.
+        await self.client.send_message(
+            message.peer_id,
+            self.strings("preview") + "\n\n" + self._render(track),
+            parse_mode="html",
+        )
+        # Кнопку публикации даёт инлайн-бот отдельным сообщением.
         await self.inline.form(
             message=message,
-            text=self.strings("preview") + "\n\n" + self._render(track),
+            text="📤 <b>Опубликовать этот трек в канал?</b>",
             reply_markup=[
                 {
                     "text": "📢 Опубликовать сейчас",
