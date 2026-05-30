@@ -1,9 +1,9 @@
-__version__ = (1, 2, 1)
+__version__ = (1, 2, 2)
 
-# meta developer: @firedragoq
+# meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: добавлено самообновление модуля (.modupdate) и версия в .modstatus
+# changelog: подписка на канал при установке (meta developer → @dragomodules)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
