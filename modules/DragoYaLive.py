@@ -1,5 +1,5 @@
-__version__ = (2, 3, 1)
-# changelog: обложка отправляется картинкой, а не файлом
+__version__ = (2, 3, 2)
+# changelog: фикс ошибки прогресс-бара (длительность приходила строкой)
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -154,17 +154,26 @@ async def get_current_track(client, token):
         return {"success": False}
 
 
-def _fmt_ms(ms: int) -> str:
+def _to_int(v) -> int:
+    """Безопасное приведение к int (Ynison может слать числа строками)."""
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fmt_ms(ms) -> str:
     """Миллисекунды → 'м:сс'."""
-    s = int((ms or 0) / 1000)
+    s = _to_int(ms) // 1000
     return f"{s // 60}:{s % 60:02d}"
 
 
-def _progress_bar(progress_ms: int, duration_ms: int, width: int = 12) -> str:
+def _progress_bar(progress_ms, duration_ms, width: int = 12) -> str:
     """Текстовый прогресс-бар воспроизведения."""
-    if not duration_ms:
+    dur = _to_int(duration_ms)
+    if not dur:
         return ""
-    filled = max(0, min(width, round(width * (progress_ms or 0) / duration_ms)))
+    filled = max(0, min(width, round(width * _to_int(progress_ms) / dur)))
     return "▬" * filled + "🔘" + "▬" * (width - filled)
 
 
@@ -301,10 +310,10 @@ class DragoYaLiveMod(loader.Module):
             )
             url = f"https://music.yandex.ru/album/{album_id}/track/{track_obj.id}"
             # длительность трека и текущая позиция воспроизведения
-            duration_ms = getattr(track_obj, "duration_ms", 0) or respond.get(
-                "duration_ms", 0
+            duration_ms = _to_int(getattr(track_obj, "duration_ms", 0)) or _to_int(
+                respond.get("duration_ms", 0)
             )
-            progress_ms = respond.get("progress_ms", 0) or 0
+            progress_ms = _to_int(respond.get("progress_ms", 0))
             return {
                 "title": title,
                 "artists": [a.name for a in artists],
