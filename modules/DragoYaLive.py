@@ -1,4 +1,4 @@
-__version__ = (2, 0, 0)
+__version__ = (2, 1, 0)
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -156,11 +156,12 @@ async def get_current_track(client, token):
 # в виде <emoji document_id=ID>🎧</emoji>. Доступные плейсхолдеры:
 # {title} {artists} {url} {track_id} {timestamp}
 DEFAULT_TEXT = (
-    "🎧 <b>Сейчас играет</b>\n\n"
-    "🎵 <b>{title}</b>\n"
-    "🎤 {artists}\n"
-    "🕒 <i>{timestamp}</i>\n\n"
-    '🔗 <a href="{url}">Слушать на Яндекс Музыке</a>'
+    "<emoji document_id=5474304919651491706>🎧</emoji> <b>Сейчас играет</b>\n\n"
+    "<emoji document_id=5242574232688298747>🎵</emoji> <b>{title}</b>\n"
+    "<emoji document_id=6039404727542747508>🎤</emoji> {artists}\n"
+    "<emoji document_id=6039454987250044861>🕒</emoji> <i>{timestamp}</i>\n\n"
+    '<emoji document_id=6039630677182254664>🔗</emoji> '
+    '<a href="{url}">Слушать на Яндекс Музыке</a>'
 )
 
 
@@ -350,7 +351,32 @@ class DragoYaLiveMod(loader.Module):
         track = await self._get_track()
         if not track:
             return await utils.answer(message, self.strings("nothing"))
-        await utils.answer(
-            message,
-            self.strings("preview") + "\n\n" + self._render(track),
+        await self.inline.form(
+            message=message,
+            text=self.strings("preview") + "\n\n" + self._render(track),
+            reply_markup=[
+                {
+                    "text": "📢 Опубликовать сейчас",
+                    "callback": self._publish_now,
+                    "args": (track,),
+                },
+                {"text": "❌ Закрыть", "action": "close"},
+            ],
         )
+
+    async def _publish_now(self, call, track):
+        """Колбэк кнопки — публикует трек в канал немедленно."""
+        if not self.config["channel_id"]:
+            return await call.edit(self.strings("no_channel"))
+        try:
+            self.last_track_id = track["track_id"]
+            await self.client.send_message(
+                int(self.config["channel_id"]),
+                self._render(track),
+                parse_mode="html",
+                silent=bool(self.config["send_silent"]),
+            )
+            await call.edit("✅ <b>Опубликовано в канал!</b>")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Ошибка ручной публикации: {e}")
+            await call.edit(f"🚫 <b>Ошибка публикации:</b> <code>{e}</code>")
