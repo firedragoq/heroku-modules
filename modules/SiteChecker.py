@@ -1,5 +1,5 @@
-__version__ = (2, 1, 0)
-# changelog: настраиваемые иконки статусов с поддержкой премиум-эмодзи
+__version__ = (2, 1, 1)
+# changelog: фикс краша .cfg из-за примера эмодзи в описании настроек
 
 # meta developer: @dragomodules
 # scope: heroku_only
@@ -117,13 +117,13 @@ class SiteCheckerMod(loader.Module):
             loader.ConfigValue(
                 "emoji_up",
                 "✅",
-                "Иконка «доступен». Можно премиум: <emoji document_id=ID>✅</emoji>",
+                "Иконка «доступен». Можно вставить премиум-эмодзи (emoji-тег с числовым document_id).",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
                 "emoji_down",
                 "🔴",
-                "Иконка «недоступен». Можно премиум: <emoji document_id=ID>🔴</emoji>",
+                "Иконка «недоступен». Можно вставить премиум-эмодзи.",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
