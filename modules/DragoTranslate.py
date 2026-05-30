@@ -1,8 +1,9 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
+# changelog: основная команда теперь .dtr (алиас .tr сохранён)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoTranslate — перевод текста/реплая (Google, без ключа).   ║
@@ -27,7 +28,7 @@ class DragoTranslateMod(loader.Module):
         "name": "DragoTranslate",
         "no_text": (
             "🚫 <b>Нет текста.</b> Ответь на сообщение или: "
-            "<code>{p}tr en привет</code>"
+            "<code>{p}dtr en привет</code>"
         ),
         "loading": "🌐 <b>Перевожу…</b>",
         "fail": "🚫 <b>Ошибка перевода:</b> <code>{}</code>",
@@ -41,7 +42,7 @@ class DragoTranslateMod(loader.Module):
         "_cls_doc": "🌐 Перевод текста и реплаев (Google Translate, без ключа).",
         "no_text": (
             "🚫 <b>Нет текста.</b> Ответь на сообщение или: "
-            "<code>{p}tr en привет</code>"
+            "<code>{p}dtr en привет</code>"
         ),
         "loading": "🌐 <b>Перевожу…</b>",
         "fail": "🚫 <b>Ошибка перевода:</b> <code>{}</code>",
@@ -79,7 +80,7 @@ class DragoTranslateMod(loader.Module):
         return translated, src
 
     @loader.command(ru_doc="[язык] — перевести реплай/текст", alias="tr")
-    async def trcmd(self, message):
+    async def dtrcmd(self, message):
         """[lang] [text] — translate reply or text"""
         args = utils.get_args_raw(message).strip()
         reply = await message.get_reply_message()
