@@ -1,4 +1,5 @@
-__version__ = (2, 0, 0)
+__version__ = (2, 1, 0)
+# changelog: настраиваемые иконки статусов с поддержкой премиум-эмодзи
 
 # meta developer: @dragomodules
 # scope: heroku_only
@@ -66,12 +67,9 @@ class SiteCheckerMod(loader.Module):
         "checking": "⏳ <b>Проверяю…</b>",
         "mon_on": "🟢 <b>Мониторинг включён.</b> Интервал: {} мин.",
         "mon_off": "🔴 <b>Мониторинг выключен.</b>",
-        "down_alert": "🔴 <b>Сайт недоступен!</b>\n🌐 {url}\n⚠️ <code>{reason}</code>",
-        "up_alert": "🟢 <b>Сайт снова доступен:</b>\n🌐 {url}\n⏱ Был недоступен: {downtime}",
-        "list_title": "🌐 <b>Сайты в мониторинге ({n}):</b>",
-        "ok": "✅",
-        "fail": "🔴",
-        "unknown": "⚪️",
+        "down_alert": "{icon} <b>Сайт недоступен!</b>\n{site} {url}\n⚠️ <code>{reason}</code>",
+        "up_alert": "{icon} <b>Сайт снова доступен:</b>\n{site} {url}\n⏱ Был недоступен: {downtime}",
+        "list_title": "{site} <b>Сайты в мониторинге ({n}):</b>",
     }
 
     strings_ru = {
@@ -85,9 +83,9 @@ class SiteCheckerMod(loader.Module):
         "checking": "⏳ <b>Проверяю…</b>",
         "mon_on": "🟢 <b>Мониторинг включён.</b> Интервал: {} мин.",
         "mon_off": "🔴 <b>Мониторинг выключен.</b>",
-        "down_alert": "🔴 <b>Сайт недоступен!</b>\n🌐 {url}\n⚠️ <code>{reason}</code>",
-        "up_alert": "🟢 <b>Сайт снова доступен:</b>\n🌐 {url}\n⏱ Был недоступен: {downtime}",
-        "list_title": "🌐 <b>Сайты в мониторинге ({n}):</b>",
+        "down_alert": "{icon} <b>Сайт недоступен!</b>\n{site} {url}\n⚠️ <code>{reason}</code>",
+        "up_alert": "{icon} <b>Сайт снова доступен:</b>\n{site} {url}\n⏱ Был недоступен: {downtime}",
+        "list_title": "{site} <b>Сайты в мониторинге ({n}):</b>",
     }
 
     def __init__(self):
@@ -116,12 +114,42 @@ class SiteCheckerMod(loader.Module):
                 "Уведомлять, когда сайт снова поднялся.",
                 validator=loader.validators.Boolean(),
             ),
+            loader.ConfigValue(
+                "emoji_up",
+                "✅",
+                "Иконка «доступен». Можно премиум: <emoji document_id=ID>✅</emoji>",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_down",
+                "🔴",
+                "Иконка «недоступен». Можно премиум: <emoji document_id=ID>🔴</emoji>",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_unknown",
+                "⚪️",
+                "Иконка «не проверялся». Можно премиум-эмодзи.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_site",
+                "🌐",
+                "Иконка сайта/заголовка. Можно премиум-эмодзи.",
+                validator=loader.validators.String(),
+            ),
         )
 
     async def client_ready(self, client, db):
         self.client = client
         self.db = db
         self.monitor_loop.interval = int(self.config["check_interval"]) * 60
+
+    def _icon(self, status: str) -> str:
+        return {
+            "up": self.config["emoji_up"],
+            "down": self.config["emoji_down"],
+        }.get(status, self.config["emoji_unknown"])
 
     # ───────────────────── проверка ─────────────────────
     async def _check(self, url: str) -> dict:
@@ -150,12 +178,12 @@ class SiteCheckerMod(loader.Module):
     def _fmt_result(self, url: str, res: dict) -> str:
         if res["ok"]:
             return (
-                f"{self.strings['ok']} <b>{utils.escape_html(_host(url))}</b> — "
+                f"{self._icon('up')} <b>{utils.escape_html(_host(url))}</b> — "
                 f"<code>{res['code']}</code>, {res['ms']} мс"
             )
         reason = res["error"] or f"HTTP {res['code']}"
         return (
-            f"{self.strings['fail']} <b>{utils.escape_html(_host(url))}</b> — "
+            f"{self._icon('down')} <b>{utils.escape_html(_host(url))}</b> — "
             f"<code>{utils.escape_html(reason)}</code>"
         )
 
@@ -191,14 +219,20 @@ class SiteCheckerMod(loader.Module):
             return
         chat = self.config["notify_chat"] or "me"
         target = chat if chat == "me" else int(chat)
+        site = self.config["emoji_site"]
         if status == "down":
             text = self.strings("down_alert").format(
+                icon=self._icon("down"),
+                site=site,
                 url=utils.escape_html(url),
                 reason=res["error"] or f"HTTP {res['code']}",
             )
         else:
             text = self.strings("up_alert").format(
-                url=utils.escape_html(url), downtime=_ago(prev_since)
+                icon=self._icon("up"),
+                site=site,
+                url=utils.escape_html(url),
+                downtime=_ago(prev_since),
             )
         try:
             await self.client.send_message(target, text, parse_mode="html")
@@ -250,9 +284,7 @@ class SiteCheckerMod(loader.Module):
             return await utils.answer(message, self.strings("empty").format(self.get_prefix()))
         rows = []
         for i, (url, info) in enumerate(sites.items(), 1):
-            icon = {"up": self.strings["ok"], "down": self.strings["fail"]}.get(
-                info.get("status"), self.strings["unknown"]
-            )
+            icon = self._icon(info.get("status", "unknown"))
             extra = ""
             if info.get("status") == "up" and info.get("ms") is not None:
                 extra = f" · {info['ms']} мс"
@@ -262,7 +294,7 @@ class SiteCheckerMod(loader.Module):
         mon = "🟢 вкл" if self.get("monitoring", False) else "🔴 выкл"
         await utils.answer(
             message,
-            self.strings("list_title").format(n=len(sites))
+            self.strings("list_title").format(site=self.config["emoji_site"], n=len(sites))
             + f"\n🔔 Мониторинг: {mon} · каждые {self.config['check_interval']} мин\n\n"
             + "\n".join(rows),
         )
@@ -292,7 +324,10 @@ class SiteCheckerMod(loader.Module):
             info["code"], info["ms"], info["error"] = res["code"], res["ms"], res["error"]
         self.set("sites", sites)
         await utils.answer(
-            msg, self.strings("list_title").format(n=len(sites)) + "\n\n" + "\n".join(lines)
+            msg,
+            self.strings("list_title").format(site=self.config["emoji_site"], n=len(sites))
+            + "\n\n"
+            + "\n".join(lines),
         )
 
     @loader.command(ru_doc="Вкл/выкл фоновый мониторинг", alias="scm")
