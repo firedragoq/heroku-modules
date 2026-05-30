@@ -1,5 +1,5 @@
-__version__ = (2, 1, 2)
-# changelog: иконка звоночка теперь настраиваемая (премиум-эмодзи)
+__version__ = (2, 2, 0)
+# changelog: премиум-эмодзи статусов по умолчанию
 
 # meta developer: @dragomodules
 # scope: heroku_only
@@ -116,31 +116,31 @@ class SiteCheckerMod(loader.Module):
             ),
             loader.ConfigValue(
                 "emoji_up",
-                "✅",
+                "<emoji document_id=5416081784641168838>🟢</emoji>",
                 "Иконка «доступен». Можно вставить премиум-эмодзи (emoji-тег с числовым document_id).",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
                 "emoji_down",
-                "🔴",
+                "<emoji document_id=5411225014148014586>🔴</emoji>",
                 "Иконка «недоступен». Можно вставить премиум-эмодзи.",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
                 "emoji_unknown",
-                "⚪️",
+                "<emoji document_id=5386367538735104399>⌛️</emoji>",
                 "Иконка «не проверялся». Можно премиум-эмодзи.",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
                 "emoji_site",
-                "🌐",
+                "<emoji document_id=5447410659077661506>🌐</emoji>",
                 "Иконка сайта/заголовка. Можно премиум-эмодзи.",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
                 "emoji_bell",
-                "🔔",
+                "<emoji document_id=5458603043203327669>🔔</emoji>",
                 "Иконка звоночка (строка мониторинга). Можно премиум-эмодзи.",
                 validator=loader.validators.String(),
             ),
