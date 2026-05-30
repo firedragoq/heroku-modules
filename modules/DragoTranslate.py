@@ -1,9 +1,9 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 1, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
-# changelog: основная команда теперь .dtr (алиас .tr сохранён)
+# changelog: команда .dtr (алиас .dtl); убран конфликт с core-командой .tr
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoTranslate — перевод текста/реплая (Google, без ключа).   ║
@@ -79,7 +79,7 @@ class DragoTranslateMod(loader.Module):
         src = data[2] if len(data) > 2 else "auto"
         return translated, src
 
-    @loader.command(ru_doc="[язык] — перевести реплай/текст", alias="tr")
+    @loader.command(ru_doc="[язык] — перевести реплай/текст", alias="dtl")
     async def dtrcmd(self, message):
         """[lang] [text] — translate reply or text"""
         args = utils.get_args_raw(message).strip()
