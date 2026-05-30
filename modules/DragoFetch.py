@@ -1,9 +1,9 @@
-__version__ = (1, 2, 0)
+__version__ = (1, 2, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: psutil pillow
-# changelog: премиум-эмодзи для метрик настраиваются в конфиге
+# changelog: фикс — картинка .fetchimg больше не исчезает
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoFetch — красивая системная инфа (fastfetch/neofetch)     ║
@@ -404,15 +404,13 @@ class DragoFetchMod(loader.Module):
             if not rows:
                 rows = self._builtin_rows()
             img = self._render_image(tool, rows)
+            # заменяем loading-сообщение на картинку (одно сообщение, без мигания)
             await utils.answer(
-                message,
-                f"🖥 <b>Система</b> · <code>{escape(platform.uname().node)}</code>",
+                msg,
+                f"{self.config['title_emoji']} <b>Система</b> · "
+                f"<code>{escape(platform.uname().node)}</code>",
                 file=img,
             )
-            try:
-                await msg.delete()
-            except Exception:  # noqa: BLE001
-                pass
         except Exception as exc:  # noqa: BLE001
             logger.exception("fetchimg failed: %s", exc)
             await utils.answer(msg, self.strings("fail").format(escape(str(exc))))
