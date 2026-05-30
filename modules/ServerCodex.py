@@ -41,7 +41,7 @@ DANGEROUS_PATTERNS = [
 
 @loader.tds
 class ServerCodexMod(loader.Module):
-    """🪐 Server Codex: AI System Core by @firedragoq"""
+    """🪐 Server Codex: AI System Core"""
 
     strings = {
         "name": "ServerCodex",
