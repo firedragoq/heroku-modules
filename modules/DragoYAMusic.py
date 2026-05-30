@@ -1,8 +1,8 @@
-__version__ = (2, 18, 2)
+__version__ = (2, 18, 3)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# changelog: длинные название/артист авто-уменьшаются и не вылезают за рамки баннера
+# changelog: заголовок умещается в одну строку (авто-уменьшение), не упирается в край
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
 
@@ -186,19 +186,20 @@ class FiredBanner:
         text_x = content_x + 62
         # правый отступ, чтобы текст не упирался в рамку карточки
         text_w = content_w - 62 - 28
-        # авто-подбор размера шрифта, чтобы заголовок не вылезал за рамки
-        title_font, title_lines = self._fit_font(
-            self.title, text_w, max_lines=2, start_size=86, min_size=44, bold=True
+        # сначала пытаемся уместить заголовок в ОДНУ строку (уменьшая шрифт),
+        # и только если совсем длинно — переносим мелким шрифтом на 2 строки
+        title_font, title_lines = self._fit_one_or_wrap(
+            self.title, text_w, one_max=86, one_min=46, wrap_size=52, wrap_min=36
         )
-        title_lh = int(title_font.size * 1.12)
+        title_lh = int(title_font.size * 1.14)
         for line in title_lines:
             self._shadow_text(draw, (text_x, y), line, title_font, (255, 255, 255, 255))
             y += title_lh
 
         y += 6
         self._plain_svg(draw, content_x, y + 12, "artist", 36, accent)
-        artist_font, artist_lines = self._fit_font(
-            self.artist, text_w, max_lines=2, start_size=54, min_size=34, bold=True
+        artist_font, artist_lines = self._fit_one_or_wrap(
+            self.artist, text_w, one_max=54, one_min=40, wrap_size=46, wrap_min=32
         )
         artist_lh = int(artist_font.size * 1.18)
         for line in artist_lines:
@@ -392,6 +393,30 @@ class FiredBanner:
         if current:
             lines.append(current)
         return lines or [text]
+
+    def _fit_one_or_wrap(
+        self,
+        text: str,
+        max_width: int,
+        one_max: int,
+        one_min: int,
+        wrap_size: int,
+        wrap_min: int,
+    ) -> Tuple[ImageFont.ImageFont, List[str]]:
+        """Сначала пытается уместить текст в ОДНУ строку (уменьшая шрифт от
+        one_max до one_min). Если не выходит — переносит на 2 строки шрифтом
+        wrap_size (с авто-уменьшением до wrap_min)."""
+        text = text.strip()
+        size = one_max
+        while size >= one_min:
+            font = self._font(size, bold=True)
+            if self._text_w(text, font) <= max_width:
+                return font, [text]
+            size -= 4
+        return self._fit_font(
+            text, max_width, max_lines=2, start_size=wrap_size,
+            min_size=wrap_min, bold=True,
+        )
 
     def _fit_font(
         self,
