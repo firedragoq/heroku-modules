@@ -1,8 +1,9 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
+# changelog: премиум-эмодзи для иконок настраиваются в конфиге
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoSpeedtest — тест скорости сети сервера (Cloudflare).     ║
@@ -50,13 +51,13 @@ class DragoSpeedtestMod(loader.Module):
         "running": "🚀 <b>Замеряю скорость сети…</b>\n<i>Это займёт ~10–20 секунд.</i>",
         "fail": "🚫 <b>Ошибка теста:</b> <code>{}</code>",
         "result": (
-            "🚀 <b>Тест скорости сети</b>\n\n"
+            "{titem} <b>Тест скорости сети</b>\n\n"
             "{demoji} <b>Download:</b> <code>{down:.1f}</code> Мбит/с\n"
             "<code>{dbar}</code>\n"
             "{uemoji} <b>Upload:</b> <code>{up:.1f}</code> Мбит/с\n"
             "<code>{ubar}</code>\n"
-            "📡 <b>Ping:</b> <code>{ping:.0f}</code> мс\n"
-            "🌐 <b>Сервер:</b> Cloudflare ({colo})"
+            "{pemoji} <b>Ping:</b> <code>{ping:.0f}</code> мс\n"
+            "{semoji} <b>Сервер:</b> Cloudflare ({colo})"
         ),
     }
 
@@ -65,13 +66,13 @@ class DragoSpeedtestMod(loader.Module):
         "running": "🚀 <b>Замеряю скорость сети…</b>\n<i>Это займёт ~10–20 секунд.</i>",
         "fail": "🚫 <b>Ошибка теста:</b> <code>{}</code>",
         "result": (
-            "🚀 <b>Тест скорости сети</b>\n\n"
+            "{titem} <b>Тест скорости сети</b>\n\n"
             "{demoji} <b>Download:</b> <code>{down:.1f}</code> Мбит/с\n"
             "<code>{dbar}</code>\n"
             "{uemoji} <b>Upload:</b> <code>{up:.1f}</code> Мбит/с\n"
             "<code>{ubar}</code>\n"
-            "📡 <b>Ping:</b> <code>{ping:.0f}</code> мс\n"
-            "🌐 <b>Сервер:</b> Cloudflare ({colo})"
+            "{pemoji} <b>Ping:</b> <code>{ping:.0f}</code> мс\n"
+            "{semoji} <b>Сервер:</b> Cloudflare ({colo})"
         ),
     }
 
@@ -94,6 +95,24 @@ class DragoSpeedtestMod(loader.Module):
                 200,
                 "Максимум шкалы прогресс-бара, Мбит/с.",
                 validator=loader.validators.Integer(minimum=10, maximum=10000),
+            ),
+            loader.ConfigValue(
+                "emoji_title",
+                "🚀",
+                "Эмодзи заголовка. Можно премиум (шлётся от аккаунта).",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_ping",
+                "📡",
+                "Эмодзи Ping. Можно премиум.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_server",
+                "🌐",
+                "Эмодзи сервера. Можно премиум.",
+                validator=loader.validators.String(),
             ),
         )
 
@@ -152,8 +171,11 @@ class DragoSpeedtestMod(loader.Module):
         await utils.answer(
             msg,
             self.strings("result").format(
+                titem=self.config["emoji_title"],
                 demoji=_speed_emoji(down),
                 uemoji=_speed_emoji(up),
+                pemoji=self.config["emoji_ping"],
+                semoji=self.config["emoji_server"],
                 down=down,
                 up=up,
                 dbar=_bar(down, scale),
