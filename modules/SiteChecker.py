@@ -1,5 +1,5 @@
-__version__ = (2, 2, 0)
-# changelog: премиум-эмодзи статусов по умолчанию
+__version__ = (2, 3, 0)
+# changelog: аптайм %, проверка по ключевому слову, алерт на медленный отклик, .sitestats
 
 # meta developer: @dragomodules
 # scope: heroku_only
@@ -115,6 +115,19 @@ class SiteCheckerMod(loader.Module):
                 validator=loader.validators.Boolean(),
             ),
             loader.ConfigValue(
+                "keyword",
+                "",
+                "Если задано — сайт считается рабочим, только если это слово есть "
+                "в HTML страницы (защита от заглушек). Пусто = проверять только код.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "slow_ms",
+                0,
+                "Порог «медленно», мс (0 = выкл). Если ответ дольше — помечается ⚠️.",
+                validator=loader.validators.Integer(minimum=0, maximum=60000),
+            ),
+            loader.ConfigValue(
                 "emoji_up",
                 "<emoji document_id=5416081784641168838>🟢</emoji>",
                 "Иконка «доступен». Можно вставить премиум-эмодзи (emoji-тег с числовым document_id).",
@@ -160,32 +173,62 @@ class SiteCheckerMod(loader.Module):
     # ───────────────────── проверка ─────────────────────
     async def _check(self, url: str) -> dict:
         timeout = aiohttp.ClientTimeout(total=int(self.config["timeout"]))
+        keyword = (self.config["keyword"] or "").strip()
+        slow_ms = int(self.config["slow_ms"])
         start = time.monotonic()
         try:
             async with aiohttp.ClientSession(timeout=timeout, headers=UA) as session:
-                # HEAD быстрее; если сайт его не любит — повторяем GET
-                try:
-                    resp = await session.head(url, allow_redirects=True)
-                    if resp.status in (403, 405, 501):
-                        resp = await session.get(url, allow_redirects=True)
-                except aiohttp.ClientError:
+                if keyword:
+                    # нужно тело страницы — только GET
                     resp = await session.get(url, allow_redirects=True)
+                    body = await resp.text(errors="ignore")
+                else:
+                    body = ""
+                    # HEAD быстрее; если сайт его не любит — повторяем GET
+                    try:
+                        resp = await session.head(url, allow_redirects=True)
+                        if resp.status in (403, 405, 501):
+                            resp = await session.get(url, allow_redirects=True)
+                    except aiohttp.ClientError:
+                        resp = await session.get(url, allow_redirects=True)
                 ms = int((time.monotonic() - start) * 1000)
                 code = resp.status
                 resp.close()
-                return {"ok": code < 400, "code": code, "ms": ms, "error": None}
+                ok = code < 400
+                error = None
+                if ok and keyword and keyword.lower() not in body.lower():
+                    ok = False
+                    error = "нет ключевого слова"
+                slow = bool(ok and slow_ms and ms > slow_ms)
+                return {"ok": ok, "code": code, "ms": ms, "error": error, "slow": slow}
         except asyncio.TimeoutError:
-            return {"ok": False, "code": None, "ms": None, "error": "таймаут"}
+            return {"ok": False, "code": None, "ms": None, "error": "таймаут", "slow": False}
         except aiohttp.ClientConnectorError:
-            return {"ok": False, "code": None, "ms": None, "error": "нет соединения / DNS"}
+            return {"ok": False, "code": None, "ms": None, "error": "нет соединения / DNS", "slow": False}
         except Exception as e:  # noqa: BLE001
-            return {"ok": False, "code": None, "ms": None, "error": type(e).__name__}
+            return {"ok": False, "code": None, "ms": None, "error": type(e).__name__, "slow": False}
+
+    @staticmethod
+    def _record_stats(info: dict, res: dict) -> None:
+        """Накопление статистики аптайма по сайту."""
+        info["checks"] = info.get("checks", 0) + 1
+        if res["ok"]:
+            info["up_count"] = info.get("up_count", 0) + 1
+
+    @staticmethod
+    def _uptime(info: dict) -> str:
+        checks = info.get("checks", 0)
+        if not checks:
+            return "—"
+        pct = 100 * info.get("up_count", 0) / checks
+        return f"{pct:.1f}%"
 
     def _fmt_result(self, url: str, res: dict) -> str:
         if res["ok"]:
+            slow = " ⚠️ медленно" if res.get("slow") else ""
             return (
                 f"{self._icon('up')} <b>{utils.escape_html(_host(url))}</b> — "
-                f"<code>{res['code']}</code>, {res['ms']} мс"
+                f"<code>{res['code']}</code>, {res['ms']} мс{slow}"
             )
         reason = res["error"] or f"HTTP {res['code']}"
         return (
@@ -211,6 +254,8 @@ class SiteCheckerMod(loader.Module):
             info["code"] = res["code"]
             info["ms"] = res["ms"]
             info["error"] = res["error"]
+            info["slow"] = res.get("slow", False)
+            self._record_stats(info, res)
             if new_status != old_status:
                 prev_since = info.get("since", 0)
                 info["status"] = new_status
@@ -294,8 +339,12 @@ class SiteCheckerMod(loader.Module):
             extra = ""
             if info.get("status") == "up" and info.get("ms") is not None:
                 extra = f" · {info['ms']} мс"
+                if info.get("slow"):
+                    extra += " ⚠️"
             elif info.get("status") == "down":
                 extra = f" · {utils.escape_html(info.get('error') or '')} · {_ago(info.get('since'))}"
+            if info.get("checks"):
+                extra += f" · ↑{self._uptime(info)}"
             rows.append(f"{i}. {icon} <b>{utils.escape_html(_host(url))}</b>{extra}")
         mon = "🟢 вкл" if self.get("monitoring", False) else "🔴 выкл"
         await utils.answer(
@@ -329,6 +378,8 @@ class SiteCheckerMod(loader.Module):
         for (url, info), res in zip(sites.items(), results):
             info["status"] = "up" if res["ok"] else "down"
             info["code"], info["ms"], info["error"] = res["code"], res["ms"], res["error"]
+            info["slow"] = res.get("slow", False)
+            self._record_stats(info, res)
         self.set("sites", sites)
         await utils.answer(
             msg,
@@ -348,3 +399,36 @@ class SiteCheckerMod(loader.Module):
             )
         else:
             await utils.answer(message, self.strings("mon_off"))
+
+    @loader.command(ru_doc="Статистика аптайма по сайтам", alias="scs")
+    async def sitestatscmd(self, message):
+        """Uptime statistics per site"""
+        sites = self.get("sites", {})
+        if not sites:
+            return await utils.answer(message, self.strings("empty").format(self.get_prefix()))
+        rows = []
+        for i, (url, info) in enumerate(sites.items(), 1):
+            icon = self._icon(info.get("status", "unknown"))
+            checks = info.get("checks", 0)
+            last = f"{info['ms']} мс" if info.get("ms") is not None else "—"
+            rows.append(
+                f"{i}. {icon} <b>{utils.escape_html(_host(url))}</b>\n"
+                f"   ↑ Аптайм: <b>{self._uptime(info)}</b> "
+                f"({info.get('up_count', 0)}/{checks}) · "
+                f"последний: {last} · в статусе: {_ago(info.get('since'))}"
+            )
+        await utils.answer(
+            message,
+            f"{self.config['emoji_site']} <b>Статистика ({len(sites)}):</b>\n\n"
+            + "\n".join(rows),
+        )
+
+    @loader.command(ru_doc="Сбросить статистику аптайма", alias="scsr")
+    async def sitestatsresetcmd(self, message):
+        """Reset uptime statistics"""
+        sites = self.get("sites", {})
+        for info in sites.values():
+            info["checks"] = 0
+            info["up_count"] = 0
+        self.set("sites", sites)
+        await utils.answer(message, "♻️ <b>Статистика аптайма сброшена.</b>")
