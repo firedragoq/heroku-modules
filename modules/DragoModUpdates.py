@@ -1,9 +1,9 @@
-__version__ = (1, 2, 2)
+__version__ = (1, 3, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: подписка на канал при установке (meta developer → @dragomodules)
+# changelog: показывает «Что нового» (changelog) при самообновлении
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -29,6 +29,7 @@ INSTALL_MARKER = "#HerokuModInstall"
 SELF_VERSION = __version__
 
 _VERSION_RE = re.compile(r"__version__\s*=\s*\(([^)]+)\)")
+_CHANGELOG_RE = re.compile(r"#\s*changelog\s*:\s*(.+)", re.IGNORECASE)
 
 
 def _parse_version(text: str):
@@ -42,6 +43,12 @@ def _parse_version(text: str):
         if piece.isdigit():
             parts.append(int(piece))
     return tuple(parts) if parts else None
+
+
+def _parse_changelog(text: str) -> str:
+    """Достаёт строку '# changelog:' из исходника модуля."""
+    m = _CHANGELOG_RE.search(text)
+    return m.group(1).strip() if m else ""
 
 
 @loader.tds
@@ -234,7 +241,10 @@ class DragoModUpdatesMod(loader.Module):
 
         # есть более новая версия — обновляемся
         new_str = ".".join(map(str, remote))
+        changelog = _parse_changelog(source)
         text = self.strings("self_updating").format(old=cur_str, new=new_str)
+        if changelog:
+            text += "\n\n🔥 <b>Что нового:</b>\n" + utils.escape_html(changelog)
         notice = reply
         if notice is None:
             notice = await self._client.send_message("me", text)
@@ -255,8 +265,11 @@ class DragoModUpdatesMod(loader.Module):
             return False
 
         # сообщение об успехе (на случай, если loader не покажет своё)
+        success = self.strings("self_updated").format(new_str)
+        if changelog:
+            success += "\n\n🔥 <b>Что нового:</b>\n" + utils.escape_html(changelog)
         try:
-            await notice.edit(self.strings("self_updated").format(new_str))
+            await notice.edit(success)
         except Exception:  # noqa: BLE001
             pass
         return True
