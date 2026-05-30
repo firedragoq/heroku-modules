@@ -1,5 +1,5 @@
-__version__ = (2, 2, 0)
-# changelog: обложка трека картинкой, плейсхолдеры {album} и {cover}
+__version__ = (2, 3, 0)
+# changelog: прогресс-бар трека и плейсхолдеры {duration} {progress} {bar}
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -153,14 +153,29 @@ async def get_current_track(client, token):
         return {"success": False}
 
 
+def _fmt_ms(ms: int) -> str:
+    """Миллисекунды → 'м:сс'."""
+    s = int((ms or 0) / 1000)
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def _progress_bar(progress_ms: int, duration_ms: int, width: int = 12) -> str:
+    """Текстовый прогресс-бар воспроизведения."""
+    if not duration_ms:
+        return ""
+    filled = max(0, min(width, round(width * (progress_ms or 0) / duration_ms)))
+    return "▬" * filled + "🔘" + "▬" * (width - filled)
+
+
 # Текст по умолчанию. Поддерживает HTML-форматирование и премиум-эмодзи
 # (emoji-тег с числовым document_id). Доступные плейсхолдеры:
-# {title} {artists} {url} {track_id} {timestamp}
+# {title} {artists} {album} {url} {cover} {track_id} {timestamp}
+# {duration} {progress} {bar}
 DEFAULT_TEXT = (
     "<emoji document_id=5474304919651491706>🎧</emoji> <b>Сейчас играет</b>\n\n"
     "<emoji document_id=5242574232688298747>🎵</emoji> <b>{title}</b>\n"
     "<emoji document_id=6039404727542747508>🎤</emoji> {artists}\n"
-    "<emoji document_id=6039454987250044861>🕒</emoji> <i>{timestamp}</i>\n\n"
+    "{bar} <code>{progress} / {duration}</code>\n\n"
     '<emoji document_id=6039630677182254664>🔗</emoji> '
     '<a href="{url}">Слушать на Яндекс Музыке</a>'
 )
@@ -284,6 +299,11 @@ class DragoYaLiveMod(loader.Module):
                 "https://" + cover_uri.replace("%%", "400x400") if cover_uri else ""
             )
             url = f"https://music.yandex.ru/album/{album_id}/track/{track_obj.id}"
+            # длительность трека и текущая позиция воспроизведения
+            duration_ms = getattr(track_obj, "duration_ms", 0) or respond.get(
+                "duration_ms", 0
+            )
+            progress_ms = respond.get("progress_ms", 0) or 0
             return {
                 "title": title,
                 "artists": [a.name for a in artists],
@@ -291,6 +311,8 @@ class DragoYaLiveMod(loader.Module):
                 "cover": cover,
                 "url": url,
                 "track_id": track_obj.id,
+                "duration_ms": duration_ms,
+                "progress_ms": progress_ms,
             }
         except Exception as e:  # noqa: BLE001
             logger.error(f"Ошибка получения трека: {e}")
@@ -300,6 +322,8 @@ class DragoYaLiveMod(loader.Module):
     def _render(self, track) -> str:
         """Подставляет данные трека в шаблон из конфига (безопасно к {})."""
         timestamp = datetime.now(MOSCOW_TZ).strftime("%d.%m.%Y %H:%M:%S МСК")
+        dur = track.get("duration_ms", 0)
+        prog = track.get("progress_ms", 0)
         repls = {
             "{title}": utils.escape_html(track["title"]),
             "{artists}": utils.escape_html(", ".join(track["artists"])),
@@ -308,6 +332,9 @@ class DragoYaLiveMod(loader.Module):
             "{cover}": track.get("cover", ""),
             "{track_id}": str(track["track_id"]),
             "{timestamp}": timestamp,
+            "{duration}": _fmt_ms(dur),
+            "{progress}": _fmt_ms(prog),
+            "{bar}": _progress_bar(prog, dur),
         }
         out = self.config["message_text"] or DEFAULT_TEXT
         for key, value in repls.items():
