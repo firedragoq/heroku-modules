@@ -1,9 +1,9 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 2, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: psutil pillow
-# changelog: вывод карточкой-картинкой (.fetchimg) + топ процессов
+# changelog: премиум-эмодзи для метрик настраиваются в конфиге
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoFetch — красивая системная инфа (fastfetch/neofetch)     ║
@@ -149,6 +149,36 @@ class DragoFetchMod(loader.Module):
                 "Эмодзи заголовка (можно премиум — шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "emoji_metrics",
+                "📊",
+                "Эмодзи заголовка «Живые метрики». Можно премиум.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_cpu",
+                "⚙️",
+                "Эмодзи CPU. Можно премиум.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_ram",
+                "🧠",
+                "Эмодзи RAM. Можно премиум.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_disk",
+                "💾",
+                "Эмодзи Disk. Можно премиум.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_uptime",
+                "⏱",
+                "Эмодзи Uptime. Можно премиум.",
+                validator=loader.validators.String(),
+            ),
         )
 
     # ───────────────────── сбор данных ─────────────────────
@@ -218,13 +248,13 @@ class DragoFetchMod(loader.Module):
         up = _fmt_uptime(time.time() - psutil.boot_time())
         lines = [
             "",
-            "📊 <b>Живые метрики:</b>",
-            f"⚙️ CPU  <code>{_bar(cpu)}</code> {cpu:.0f}%",
-            f"🧠 RAM  <code>{_bar(vm.percent)}</code> "
+            f"{self.config['emoji_metrics']} <b>Живые метрики:</b>",
+            f"{self.config['emoji_cpu']} CPU  <code>{_bar(cpu)}</code> {cpu:.0f}%",
+            f"{self.config['emoji_ram']} RAM  <code>{_bar(vm.percent)}</code> "
             f"{_human(vm.used)} / {_human(vm.total)} ({vm.percent:.0f}%)",
-            f"💾 Disk <code>{_bar(du.percent)}</code> "
+            f"{self.config['emoji_disk']} Disk <code>{_bar(du.percent)}</code> "
             f"{_human(du.used)} / {_human(du.total)} ({du.percent:.0f}%)",
-            f"⏱ Uptime: <b>{up}</b>",
+            f"{self.config['emoji_uptime']} Uptime: <b>{up}</b>",
         ]
         return "\n".join(lines)
 
@@ -392,10 +422,13 @@ class DragoFetchMod(loader.Module):
         """Top processes by CPU and RAM"""
         msg = await utils.answer(message, "📊 <b>Собираю процессы…</b>")
         by_cpu, by_ram = await self._top_procs()
-        lines = ["📊 <b>Топ процессов</b>\n", "⚙️ <b>По CPU:</b>"]
+        lines = [
+            f"{self.config['emoji_metrics']} <b>Топ процессов</b>\n",
+            f"{self.config['emoji_cpu']} <b>По CPU:</b>",
+        ]
         for name, cpu, _ in by_cpu:
             lines.append(f"• <code>{escape(name)}</code> — {cpu:.0f}%")
-        lines.append("\n🧠 <b>По RAM:</b>")
+        lines.append(f"\n{self.config['emoji_ram']} <b>По RAM:</b>")
         for name, _, mem in by_ram:
             lines.append(f"• <code>{escape(name)}</code> — {mem:.1f}%")
         await utils.answer(msg, "\n".join(lines))
