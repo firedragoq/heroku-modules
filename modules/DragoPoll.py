@@ -1,15 +1,14 @@
-__version__ = (1, 0, 1)
+__version__ = (1, 0, 2)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
-# changelog: фикс Poll.hash для новых версий Telethon (определяется по сигнатуре)
+# changelog: надёжный фикс Poll.hash через try/except (работает на любой версии Telethon)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPoll — быстрые опросы/голосования в чате (нативный poll). ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-import inspect
 import logging
 import random
 
@@ -29,6 +28,16 @@ def _twe(text: str):
         return TextWithEntities(text=text, entities=[])
     except Exception:  # noqa: BLE001
         return text
+
+
+def _make_poll(**kwargs) -> Poll:
+    """Создаёт Poll, подстраиваясь под версию Telethon (поле hash то есть, то нет)."""
+    try:
+        return Poll(**kwargs)
+    except TypeError as exc:
+        if "hash" in str(exc):
+            return Poll(hash=0, **kwargs)
+        raise
 
 
 @loader.tds
@@ -121,7 +130,7 @@ class DragoPollMod(loader.Module):
         if len(options) > 10:
             return await utils.answer(message, self.strings("too_many"))
 
-        poll_kwargs = dict(
+        poll = _make_poll(
             id=random.getrandbits(63),
             question=_twe(question[:255]),
             answers=[
@@ -132,10 +141,6 @@ class DragoPollMod(loader.Module):
             public_voters=not self.config["anonymous"],
             multiple_choice=bool(self.config["multiple_choice"]),
         )
-        # некоторые версии Telethon требуют поле hash у Poll
-        if "hash" in inspect.signature(Poll).parameters:
-            poll_kwargs["hash"] = 0
-        poll = Poll(**poll_kwargs)
 
         try:
             await self._client.send_file(
