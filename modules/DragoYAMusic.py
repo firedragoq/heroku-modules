@@ -1,8 +1,8 @@
-__version__ = (2, 19, 0)
+__version__ = (2, 19, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# changelog: переключатель инлайн-режима для .dn (use_inline) — премиум-текст от аккаунта + кнопки от инлайн-бота
+# changelog: инлайн-режим (.dn/.dq) — всё одним сообщением ОТ БОТА: баннер+премиум-эмодзи (конверт в Bot API)+кнопки
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
 
@@ -2099,30 +2099,68 @@ class DragoYAMusicMod(loader.Module):
         banner = await self._render_banner(now)
         await utils.answer(message=message, response=text, file=banner)
 
-    async def _send_now_inline(self, message: telethon.types.Message):
-        """Инлайн-режим: премиум-текст/баннер от аккаунта + кнопки от инлайн-бота.
+    @staticmethod
+    def _to_bot_emoji(text: str) -> str:
+        """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id="ID">.
 
-        Премиум-эмодзи рендерятся только в сообщениях аккаунта, поэтому сам
-        трек шлёт аккаунт, а инлайн-бот добавляет управляющие кнопки отдельным
-        сообщением (ровно как в DragoYaLive).
+        Инлайн-бот (aiogram) рендерит премиум-эмодзи именно в формате Bot API,
+        поэтому перед отправкой через инлайн конвертируем теги.
         """
+        return re.sub(
+            r"<emoji document_id=(\d+)>(.*?)</emoji>",
+            r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+            text,
+            flags=re.DOTALL,
+        )
+
+    async def _upload_image_url(self, data: bytes) -> Optional[str]:
+        """Заливает баннер на бесплатный хостинг (catbox → 0x0), возвращает URL.
+
+        Heroku inline form принимает photo только как URL, поэтому сгенерированный
+        баннер сначала выкладываем и отдаём ссылку.
+        """
+        headers = {"User-Agent": "Mozilla/5.0 (DragoYAMusic)"}
+        timeout = aiohttp.ClientTimeout(total=30)
+        hosts = [
+            ("https://catbox.moe/user/api.php", "fileToUpload", {"reqtype": "fileupload"}),
+            ("https://0x0.st", "file", {}),
+        ]
+        for url, field, extra in hosts:
+            try:
+                async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
+                    form = aiohttp.FormData()
+                    for k, v in extra.items():
+                        form.add_field(k, v)
+                    form.add_field(field, data, filename="banner.png")
+                    async with s.post(url, data=form) as r:
+                        body = (await r.text()).strip()
+                        if body.startswith("http"):
+                            return body
+            except Exception as e:  # noqa: BLE001
+                logger.warning("banner upload via %s failed: %s", url, e)
+        return None
+
+    async def _send_now_inline(self, message: telethon.types.Message):
         now = await self._current_or_answer(message)
         if not now:
             return
+        await self._send_track_inline(message, now)
 
-        text = await self._render_text(now)
-        chat_id = utils.get_chat_id(message)
+    async def _send_track_inline(self, message: telethon.types.Message, now: Dict[str, Any]):
+        """Полноценный инлайн: баннер + премиум-текст + кнопки одним сообщением от бота."""
+        text = self._to_bot_emoji(await self._render_text(now))
+        photo_url = None
         if self.config["send_banner"]:
-            banner = await self._render_banner(now)
-            await self._client.send_file(
-                chat_id, banner, caption=text, parse_mode="html"
-            )
-        else:
-            await self._client.send_message(chat_id, text, parse_mode="html")
-
+            try:
+                banner = await self._render_banner(now)
+                photo_url = await self._upload_image_url(banner.getvalue())
+            except Exception as e:  # noqa: BLE001
+                logger.warning("inline banner failed: %s", e)
+        chat_id = utils.get_chat_id(message)
         await self.inline.form(
             message=message,
-            text=self.strings("inline_controls"),
+            text=text,
+            photo=photo_url,
             reply_markup=[
                 [
                     {
@@ -2171,9 +2209,9 @@ class DragoYAMusicMod(loader.Module):
     async def _dn_inline_link(self, call, now):
         """Кнопка «Ссылка» — показывает ссылку на трек в самом сообщении."""
         link = (
-            f'{self.config["emoji_link"]} '
+            f'{self._to_bot_emoji(self.config["emoji_link"])} '
             f'<a href="{html.escape(now["url"], quote=True)}">'
-            f"{self._track_title(now)}</a>"
+            f"{html.escape(self._track_title(now))}</a>"
         )
         await call.edit(link)
 
@@ -2253,6 +2291,11 @@ class DragoYAMusicMod(loader.Module):
 
         track = search.tracks.results[0]
         now = self._build_now(track, paused=False, device="Search", volume="?")
+
+        # инлайн-режим: показываем найденный трек одним сообщением от бота с кнопками
+        if self.config["use_inline"] and getattr(self, "inline", None):
+            return await self._send_track_inline(message, now)
+
         await utils.answer(message, (await self._render_text(now)) + "\n\n" + self.strings("downloading_track"))
 
         audio = await self._download_track(ym_client, now["track_id"])
