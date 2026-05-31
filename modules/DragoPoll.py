@@ -1,31 +1,42 @@
-__version__ = (1, 0, 2)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
-# changelog: надёжный фикс Poll.hash через try/except (работает на любой версии Telethon)
+# changelog: премиум-эмодзи в вопросе и вариантах опроса (перенос custom_emoji entities)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPoll — быстрые опросы/голосования в чате (нативный poll). ║
+# ║  Поддержка премиум-эмодзи в вопросе и вариантах.                ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import logging
 import random
 
 import telethon
-from telethon.tl.types import InputMediaPoll, Poll, PollAnswer
+from telethon.tl.types import (
+    InputMediaPoll,
+    MessageEntityCustomEmoji,
+    Poll,
+    PollAnswer,
+)
 
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
 
 
-def _twe(text: str):
+def _u16(s: str) -> int:
+    """Длина строки в кодовых единицах UTF-16 (как считает Telegram offset/length)."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _twe(text: str, entities=None):
     """Текст для poll: TextWithEntities (новый Telethon) или str (старый)."""
     try:
         from telethon.tl.types import TextWithEntities
 
-        return TextWithEntities(text=text, entities=[])
+        return TextWithEntities(text=text, entities=entities or [])
     except Exception:  # noqa: BLE001
         return text
 
@@ -100,19 +111,65 @@ class DragoPollMod(loader.Module):
         )
 
     @staticmethod
-    def _split(raw: str) -> list[str]:
-        """Делит ввод на части по | или переводам строк."""
-        if "|" in raw:
-            parts = raw.split("|")
-        else:
-            parts = raw.splitlines()
-        return [p.strip() for p in parts if p.strip()]
+    def _custom_emoji(message) -> list:
+        return [
+            e for e in (message.entities or [])
+            if isinstance(e, MessageEntityCustomEmoji)
+        ]
+
+    def _segment(self, piece: str, seg_abs_u16: int, custom: list, limit: int):
+        """Из куска текста делает (stripped_text, [entities]) с пересчётом offset'ов.
+
+        seg_abs_u16 — абсолютный UTF-16 offset начала piece в исходном сообщении.
+        Берём только те custom_emoji, что целиком попадают в обрезанный кусок.
+        """
+        lead = len(piece) - len(piece.lstrip())
+        stripped = piece.strip()[:limit]
+        if not stripped:
+            return "", []
+        start = seg_abs_u16 + _u16(piece[:lead])
+        end = start + _u16(stripped)
+        ents = [
+            MessageEntityCustomEmoji(
+                offset=e.offset - start, length=e.length, document_id=e.document_id
+            )
+            for e in custom
+            if e.offset >= start and e.offset + e.length <= end
+        ]
+        return stripped, ents
+
+    def _parse_segments(self, message, tail: str, tail_abs_u16: int):
+        """Делит tail по | (или строкам) и возвращает [(text, entities), …]."""
+        custom = self._custom_emoji(message)
+        sep = "|" if "|" in tail else "\n"
+        out = []
+        idx = 0
+        for i, piece in enumerate(tail.split(sep)):
+            seg_abs = tail_abs_u16 + _u16(tail[:idx])
+            # вопрос (первый сегмент) до 255 символов, варианты — до 100
+            text, ents = self._segment(piece, seg_abs, custom, 255 if i == 0 else 100)
+            if text:
+                out.append((text, ents))
+            idx += len(piece) + len(sep)
+        return out
 
     @loader.command(ru_doc="<вопрос> | <вар1> | <вар2> … — создать опрос")
     async def pollcmd(self, message: telethon.types.Message):
         """<question> | <opt1> | <opt2> … — create a poll"""
-        raw = utils.get_args_raw(message).strip()
-        if not raw:
+        raw = (message.raw_text or "")
+        # отделяем команду (префикс+cmd) от аргументов по первому пробелу/переводу строки
+        head = raw
+        ws_pos = next((i for i, c in enumerate(raw) if c.isspace()), -1)
+        if ws_pos == -1:
+            return await utils.answer(
+                message,
+                self.strings("usage").format(
+                    emoji=self.config["emoji_poll"], p=self.get_prefix()
+                ),
+            )
+        head = raw[:ws_pos + 1]
+        tail = raw[ws_pos + 1:]
+        if not tail.strip():
             return await utils.answer(
                 message,
                 self.strings("usage").format(
@@ -120,22 +177,22 @@ class DragoPollMod(loader.Module):
                 ),
             )
 
-        parts = self._split(raw)
-        if len(parts) < 3:
+        segments = self._parse_segments(message, tail, _u16(head))
+        if len(segments) < 3:
             return await utils.answer(
                 message, self.strings("need_options").format(p=self.get_prefix())
             )
 
-        question, options = parts[0], parts[1:]
+        (q_text, q_ents), options = segments[0], segments[1:]
         if len(options) > 10:
             return await utils.answer(message, self.strings("too_many"))
 
         poll = _make_poll(
             id=random.getrandbits(63),
-            question=_twe(question[:255]),
+            question=_twe(q_text, q_ents),
             answers=[
-                PollAnswer(text=_twe(opt[:100]), option=bytes([i]))
-                for i, opt in enumerate(options)
+                PollAnswer(text=_twe(opt, ents), option=bytes([i]))
+                for i, (opt, ents) in enumerate(options)
             ],
             closed=False,
             public_voters=not self.config["anonymous"],
