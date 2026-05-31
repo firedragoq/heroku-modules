@@ -1,14 +1,15 @@
-__version__ = (1, 0, 2)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
-# changelog: авто-перебор сервисов при ошибке (is.gd блокирует IP некоторых хостов)
+# changelog: загрузка фото ответом → прямая ссылка (catbox/0x0), команда .shortimg
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  DragoShorten — короткие ссылки (is.gd / TinyURL, без ключа).  ║
+# ║  DragoShorten — короткие ссылки + заливка фото (без ключа).    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+import io
 import logging
 from urllib.parse import quote
 
@@ -24,6 +25,10 @@ _SERVICES = {
     "tinyurl": "https://tinyurl.com/api-create.php?url={url}",
     "clckru": "https://clck.ru/--?url={url}",
 }
+
+# Бесплатные файлхостинги без ключа (порядок = приоритет)
+_IMG_HOSTS = ["catbox", "0x0"]
+_UA = "Mozilla/5.0 (DragoShorten)"
 
 
 @loader.tds
@@ -48,12 +53,28 @@ class DragoShortenMod(loader.Module):
         "expanding": "{emoji} <b>Разворачиваю…</b>",
         "expanded": "{emoji} <b>Полная ссылка:</b>\n<code>{full}</code>",
         "fail": "🚫 <b>Ошибка:</b> <code>{}</code>",
+        "no_media": (
+            "🚫 <b>Ответь на фото/файл</b> командой <code>{p}shortimg</code>, "
+            "чтобы получить на него ссылку."
+        ),
+        "uploading": "{emoji} <b>Загружаю файл…</b>",
+        "img_result": (
+            "{emoji} <b>Файл загружен</b> <i>({host})</i>\n\n🔗 <code>{link}</code>"
+        ),
+        "img_result_short": (
+            "{emoji} <b>Файл загружен</b> <i>({host})</i>\n\n"
+            "🔗 <code>{short}</code>\n📎 <i>{link}</i>"
+        ),
+        "img_failed": (
+            "🚫 <b>Не удалось загрузить файл.</b>\n<code>{detail}</code>"
+        ),
     }
 
     strings_ru = {
-        "_cls_doc": "🔗 Короткие ссылки (is.gd / TinyURL, без ключа).",
+        "_cls_doc": "🔗 Короткие ссылки + заливка фото в ссылку (без ключа).",
         "shortcmd_doc": "<url> — сократить ссылку",
         "expandcmd_doc": "<url> — развернуть короткую ссылку",
+        "shortimgcmd_doc": "ответом на фото/файл — получить прямую ссылку",
     }
 
     def __init__(self):
@@ -70,6 +91,18 @@ class DragoShortenMod(loader.Module):
                 "Эмодзи ссылки. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "image_host",
+                "catbox",
+                "Хостинг файлов: catbox или 0x0.",
+                validator=loader.validators.Choice(_IMG_HOSTS),
+            ),
+            loader.ConfigValue(
+                "shorten_image_link",
+                False,
+                "Дополнительно сокращать ссылку на загруженный файл.",
+                validator=loader.validators.Boolean(),
+            ),
         )
 
     def _target(self, message):
@@ -78,6 +111,37 @@ class DragoShortenMod(loader.Module):
         if args:
             return args.split()[0]
         return None
+
+    async def _shorten_any(self, url: str) -> tuple[str, str]:
+        """Перебирает сервисы. Возвращает (сервис, короткая_ссылка) или ('', '')."""
+        order = [self.config["service"]] + [
+            s for s in _SERVICES if s != self.config["service"]
+        ]
+        for svc in order:
+            try:
+                return svc, await self._try_service(svc, url)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shorten via %s failed: %s", svc, exc)
+        return "", ""
+
+    async def _upload_image(self, host: str, data: bytes, fname: str) -> str:
+        """Заливает файл на хостинг, возвращает прямую ссылку или бросает исключение."""
+        timeout = aiohttp.ClientTimeout(total=120)
+        headers = {"User-Agent": _UA}
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            form = aiohttp.FormData()
+            if host == "catbox":
+                form.add_field("reqtype", "fileupload")
+                form.add_field("fileToUpload", data, filename=fname)
+                api = "https://catbox.moe/user/api.php"
+            else:  # 0x0.st
+                form.add_field("file", data, filename=fname)
+                api = "https://0x0.st"
+            async with session.post(api, data=form) as resp:
+                body = (await resp.text()).strip()
+                if resp.status >= 400 or not body.startswith("http"):
+                    raise RuntimeError(body[:150] or f"HTTP {resp.status}")
+                return body
 
     async def _try_service(self, svc: str, url: str) -> str:
         """Возвращает короткую ссылку или бросает исключение с текстом ошибки сервиса."""
@@ -158,4 +222,70 @@ class DragoShortenMod(loader.Module):
             return await utils.answer(msg, self.strings("fail").format(utils.escape_html(str(exc))))
         await utils.answer(
             msg, self.strings("expanded").format(emoji=emoji, full=utils.escape_html(full))
+        )
+
+    @loader.command(ru_doc="ответом на фото/файл — получить прямую ссылку", alias="simg")
+    async def shortimgcmd(self, message):
+        """Reply to a photo/file — get a direct link"""
+        reply = await message.get_reply_message()
+        if not reply or not reply.media:
+            return await utils.answer(
+                message, self.strings("no_media").format(p=self.get_prefix())
+            )
+
+        emoji = self.config["emoji_link"]
+        msg = await utils.answer(message, self.strings("uploading").format(emoji=emoji))
+        try:
+            data = await reply.download_media(bytes)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("download failed: %s", exc)
+            return await utils.answer(
+                msg, self.strings("img_failed").format(detail=utils.escape_html(str(exc)))
+            )
+
+        ext = ""
+        if getattr(reply, "file", None) and reply.file.ext:
+            ext = reply.file.ext
+        fname = f"upload{ext or '.jpg'}"
+
+        # выбранный хостинг, затем второй как фолбэк
+        order = [self.config["image_host"]] + [
+            h for h in _IMG_HOSTS if h != self.config["image_host"]
+        ]
+        link, used_host, errors = "", "", []
+        for host in order:
+            try:
+                link = await self._upload_image(host, data, fname)
+                used_host = host
+                break
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("upload via %s failed: %s", host, exc)
+                errors.append(f"{host}: {exc}")
+        if not link:
+            logger.warning("image upload all failed: %s", errors)
+            return await utils.answer(
+                msg,
+                self.strings("img_failed").format(
+                    detail=utils.escape_html("; ".join(errors)[:300])
+                ),
+            )
+
+        if self.config["shorten_image_link"]:
+            svc, short = await self._shorten_any(link)
+            if short:
+                return await utils.answer(
+                    msg,
+                    self.strings("img_result_short").format(
+                        emoji=emoji,
+                        host=f"{used_host} → {svc}",
+                        short=utils.escape_html(short),
+                        link=utils.escape_html(link),
+                    ),
+                )
+
+        await utils.answer(
+            msg,
+            self.strings("img_result").format(
+                emoji=emoji, host=used_host, link=utils.escape_html(link)
+            ),
         )
