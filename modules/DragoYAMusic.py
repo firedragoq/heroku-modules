@@ -1,8 +1,8 @@
-__version__ = (2, 18, 4)
+__version__ = (2, 19, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# changelog: иконка 🎵 в каталоге (ведущий эмодзи в описании)
+# changelog: переключатель инлайн-режима для .dn (use_inline) — премиум-текст от аккаунта + кнопки от инлайн-бота
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
 
@@ -935,6 +935,10 @@ class DragoYAMusicMod(loader.Module):
         "now_listening_label": "Now listening on",
         "playing_from_label": "Playing from:",
         "yandex_music_link": "Yandex Music",
+        "inline_controls": "🎛 <b>Управление треком</b>",
+        "btn_audio": "📥 Аудио",
+        "btn_link": "🔗 Ссылка",
+        "btn_close": "❌ Закрыть",
     }
 
     strings_ru = {
@@ -986,6 +990,10 @@ class DragoYAMusicMod(loader.Module):
         "now_listening_label": "Слушается на",
         "playing_from_label": "Источник:",
         "yandex_music_link": "Яндекс Музыка",
+        "inline_controls": "🎛 <b>Управление треком</b>",
+        "btn_audio": "📥 Аудио",
+        "btn_link": "🔗 Ссылка",
+        "btn_close": "❌ Закрыть",
     }
 
     strings_uk = {
@@ -1203,6 +1211,14 @@ class DragoYAMusicMod(loader.Module):
                 "send_banner",
                 True,
                 "Attach a generated banner to .dyan",
+                validator=loader.validators.Boolean(),
+            ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Inline mode for .dyan: премиум-текст/баннер от аккаунта + "
+                "кнопки управления от инлайн-бота (аудио, ссылка). Премиум-эмодзи "
+                "сохраняются в обоих режимах.",
                 validator=loader.validators.Boolean(),
             ),
             loader.ConfigValue(
@@ -2066,6 +2082,9 @@ class DragoYAMusicMod(loader.Module):
     )
     async def dncmd(self, message: telethon.types.Message):
         """Send current Yandex Music track with banner."""
+        if self.config["use_inline"] and getattr(self, "inline", None):
+            return await self._send_now_inline(message)
+
         await utils.answer(message, self.strings("loading"))
         now = await self._current_or_answer(message)
         if not now:
@@ -2079,6 +2098,84 @@ class DragoYAMusicMod(loader.Module):
         # без промежуточного показа текста (чтобы не мигало)
         banner = await self._render_banner(now)
         await utils.answer(message=message, response=text, file=banner)
+
+    async def _send_now_inline(self, message: telethon.types.Message):
+        """Инлайн-режим: премиум-текст/баннер от аккаунта + кнопки от инлайн-бота.
+
+        Премиум-эмодзи рендерятся только в сообщениях аккаунта, поэтому сам
+        трек шлёт аккаунт, а инлайн-бот добавляет управляющие кнопки отдельным
+        сообщением (ровно как в DragoYaLive).
+        """
+        now = await self._current_or_answer(message)
+        if not now:
+            return
+
+        text = await self._render_text(now)
+        chat_id = utils.get_chat_id(message)
+        if self.config["send_banner"]:
+            banner = await self._render_banner(now)
+            await self._client.send_file(
+                chat_id, banner, caption=text, parse_mode="html"
+            )
+        else:
+            await self._client.send_message(chat_id, text, parse_mode="html")
+
+        await self.inline.form(
+            message=message,
+            text=self.strings("inline_controls"),
+            reply_markup=[
+                [
+                    {
+                        "text": self.strings("btn_audio"),
+                        "callback": self._dn_inline_audio,
+                        "args": (now, chat_id),
+                    },
+                    {
+                        "text": self.strings("btn_link"),
+                        "callback": self._dn_inline_link,
+                        "args": (now,),
+                    },
+                ],
+                [{"text": self.strings("btn_close"), "action": "close"}],
+            ],
+        )
+
+    async def _dn_inline_audio(self, call, now, chat_id):
+        """Кнопка «Аудио» — скачивает и шлёт трек аудиофайлом от аккаунта."""
+        await call.answer(self.strings("downloading_track"))
+        ym_client = await self._get_ym_client()
+        audio = (
+            await self._download_track(ym_client, now["track_id"])
+            if ym_client
+            else None
+        )
+        if not audio:
+            return await call.answer(
+                self.strings("download_error"), show_alert=True
+            )
+        audio.name = self._safe_track_name(now)
+        await self._client.send_file(
+            chat_id,
+            audio,
+            caption=await self._render_text(now),
+            parse_mode="html",
+            attributes=[
+                telethon.types.DocumentAttributeAudio(
+                    duration=int(now["duration_ms"] / 1000),
+                    title=now["title"],
+                    performer=now["artist"],
+                )
+            ],
+        )
+
+    async def _dn_inline_link(self, call, now):
+        """Кнопка «Ссылка» — показывает ссылку на трек в самом сообщении."""
+        link = (
+            f'{self.config["emoji_link"]} '
+            f'<a href="{html.escape(now["url"], quote=True)}">'
+            f"{self._track_title(now)}</a>"
+        )
+        await call.edit(link)
 
     @loader.command(
         ru_doc="Отправить ссылку на текущий трек",
