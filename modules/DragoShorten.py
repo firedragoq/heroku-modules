@@ -1,9 +1,9 @@
-__version__ = (1, 0, 1)
+__version__ = (1, 0, 2)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
-# changelog: URL-кодирование параметра (фикс «database insert failed» на is.gd)
+# changelog: авто-перебор сервисов при ошибке (is.gd блокирует IP некоторых хостов)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoShorten — короткие ссылки (is.gd / TinyURL, без ключа).  ║
@@ -38,8 +38,12 @@ class DragoShortenMod(loader.Module):
         ),
         "loading": "{emoji} <b>Сокращаю…</b>",
         "result": (
-            "{emoji} <b>Готово</b>\n\n🔗 <code>{short}</code>\n"
+            "{emoji} <b>Готово</b> <i>({svc})</i>\n\n🔗 <code>{short}</code>\n"
             "↩️ <i>{orig}</i>"
+        ),
+        "all_failed": (
+            "🚫 <b>Все сервисы отказали.</b>\n<code>{detail}</code>\n\n"
+            "💡 Часто причина — блок IP хостинга. Попробуй позже."
         ),
         "expanding": "{emoji} <b>Разворачиваю…</b>",
         "expanded": "{emoji} <b>Полная ссылка:</b>\n<code>{full}</code>",
@@ -75,12 +79,19 @@ class DragoShortenMod(loader.Module):
             return args.split()[0]
         return None
 
-    async def _get(self, url: str) -> tuple[int, str, str]:
+    async def _try_service(self, svc: str, url: str) -> str:
+        """Возвращает короткую ссылку или бросает исключение с текстом ошибки сервиса."""
+        api = _SERVICES[svc].format(url=quote(url, safe=""))
         timeout = aiohttp.ClientTimeout(total=20)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, allow_redirects=False) as resp:
+            async with session.get(api, allow_redirects=False) as resp:
+                # clck.ru отдаёт ссылку телом при 200, остальные — тоже телом
                 body = (await resp.text()).strip()
-                return resp.status, body, str(resp.headers.get("Location", ""))
+                loc = str(resp.headers.get("Location", "")).strip()
+        short = body if body.startswith("http") else (loc if loc.startswith("http") else "")
+        if not short:
+            raise RuntimeError(body[:150] or f"HTTP {resp.status}")
+        return short
 
     @loader.command(ru_doc="<url> — сократить ссылку", alias="short")
     async def shortcmd(self, message):
@@ -100,22 +111,31 @@ class DragoShortenMod(loader.Module):
 
         emoji = self.config["emoji_link"]
         msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
-        api = _SERVICES[self.config["service"]].format(url=quote(url, safe=""))
-        try:
-            status, body, _ = await self._get(api)
-            if status >= 400 or not body.startswith("http"):
-                raise RuntimeError(body[:200] or f"HTTP {status}")
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("shorten failed: %s", exc)
-            return await utils.answer(msg, self.strings("fail").format(utils.escape_html(str(exc))))
 
+        # сначала выбранный сервис, затем остальные как фолбэк
+        order = [self.config["service"]] + [s for s in _SERVICES if s != self.config["service"]]
+        errors = []
+        for svc in order:
+            try:
+                short = await self._try_service(svc, url)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("shorten via %s failed: %s", svc, exc)
+                errors.append(f"{svc}: {exc}")
+                continue
+            return await utils.answer(
+                msg,
+                self.strings("result").format(
+                    emoji=emoji,
+                    svc=svc,
+                    short=utils.escape_html(short),
+                    orig=utils.escape_html(url[:120]),
+                ),
+            )
+
+        logger.warning("shorten all failed: %s", errors)
         await utils.answer(
             msg,
-            self.strings("result").format(
-                emoji=emoji,
-                short=utils.escape_html(body),
-                orig=utils.escape_html(url[:120]),
-            ),
+            self.strings("all_failed").format(detail=utils.escape_html("; ".join(errors)[:300])),
         )
 
     @loader.command(ru_doc="<url> — развернуть короткую ссылку", alias="expand")
