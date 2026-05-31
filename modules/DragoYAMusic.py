@@ -1,8 +1,8 @@
-__version__ = (2, 19, 2)
+__version__ = (2, 19, 3)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# changelog: инлайн-режим без кнопок — только баннер + премиум-текст одним сообщением от бота
+# changelog: use_inline теперь влияет на ВСЕ команды — ответы идут от инлайн-бота (кроме live-текста .dv и файла .da)
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
 
@@ -1924,19 +1924,19 @@ class DragoYAMusicMod(loader.Module):
 
     async def _current_or_answer(self, message: telethon.types.Message) -> Optional[Dict[str, Any]]:
         if not self._token():
-            await utils.answer(message, self.strings("no_token"))
+            await self._reply(message, self.strings("no_token"))
             return None
         try:
             now = await self._now_playing()
         except Exception as e:
             logger.warning("Now playing lookup failed: %s", e)
-            await utils.answer(message, self.strings("bad_token"))
+            await self._reply(message, self.strings("bad_token"))
             return None
         if not now:
-            await utils.answer(message, self.strings("not_playing"))
+            await self._reply(message, self.strings("not_playing"))
             return None
         if now["paused"] and not self.config["show_paused"]:
-            await utils.answer(message, self.strings("paused"))
+            await self._reply(message, self.strings("paused"))
             return None
         return now
 
@@ -2006,7 +2006,7 @@ class DragoYAMusicMod(loader.Module):
     )
     async def dgcmd(self, message: telethon.types.Message):
         """Show token guide and command list."""
-        await utils.answer(message, self.strings("guide"))
+        await self._reply(message, self.strings("guide"))
 
     @loader.command(
         ru_doc="Сохранить OAuth-токен Яндекс Музыки",
@@ -2019,12 +2019,12 @@ class DragoYAMusicMod(loader.Module):
         """<token> - save Yandex Music OAuth token."""
         token = utils.get_args_raw(message).strip()
         if not token:
-            return await utils.answer(message, self.strings("no_token"))
+            return await self._reply(message, self.strings("no_token"))
 
         self.config["token"] = token
         self._ym_client = None
         self._ym_token = None
-        await utils.answer(message, self.strings("saved"))
+        await self._reply(message, self.strings("saved"))
 
     @loader.command(
         ru_doc="Проверить подключение к Яндекс Музыке",
@@ -2036,10 +2036,10 @@ class DragoYAMusicMod(loader.Module):
     async def dscmd(self, message: telethon.types.Message):
         """Check Yandex Music token."""
         if not self._token():
-            return await utils.answer(message, self.strings("no_token"))
-        await utils.answer(message, self.strings("checking"))
+            return await self._reply(message, self.strings("no_token"))
+        await self._status(message, self.strings("checking"))
         client = await self._get_ym_client()
-        await utils.answer(message, self.strings("connected") if client else self.strings("bad_token"))
+        await self._reply(message, self.strings("connected") if client else self.strings("bad_token"))
 
     @loader.command(
         ru_doc="Включить/выключить autobio",
@@ -2051,10 +2051,10 @@ class DragoYAMusicMod(loader.Module):
     async def dbcmd(self, message: telethon.types.Message):
         """Toggle autobio with currently playing track."""
         if not self._token():
-            return await utils.answer(message, self.strings("no_token"))
+            return await self._reply(message, self.strings("no_token"))
         client = await self._get_ym_client()
         if not client:
-            return await utils.answer(message, self.strings("bad_token"))
+            return await self._reply(message, self.strings("bad_token"))
 
         enabled = not self.get("autobio", False)
         self.set("autobio", enabled)
@@ -2071,7 +2071,7 @@ class DragoYAMusicMod(loader.Module):
                 )
             except Exception:
                 pass
-        await utils.answer(message, self.strings("autobio_enabled" if enabled else "autobio_disabled"))
+        await self._reply(message, self.strings("autobio_enabled" if enabled else "autobio_disabled"))
 
     @loader.command(
         ru_doc="Отправить текущий трек с баннером",
@@ -2082,7 +2082,7 @@ class DragoYAMusicMod(loader.Module):
     )
     async def dncmd(self, message: telethon.types.Message):
         """Send current Yandex Music track with banner."""
-        if self.config["use_inline"] and getattr(self, "inline", None):
+        if self._inline_on:
             return await self._send_now_inline(message)
 
         await utils.answer(message, self.strings("loading"))
@@ -2098,6 +2098,31 @@ class DragoYAMusicMod(loader.Module):
         # без промежуточного показа текста (чтобы не мигало)
         banner = await self._render_banner(now)
         await utils.answer(message=message, response=text, file=banner)
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message: telethon.types.Message, text: str):
+        """Единый текстовый ответ: инлайн-форма от бота (use_inline) или utils.answer.
+
+        В инлайн-режиме премиум-эмодзи конвертируются в Bot API формат.
+        """
+        if self._inline_on:
+            try:
+                return await self.inline.form(
+                    message=message, text=self._to_bot_emoji(text)
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", e)
+        return await utils.answer(message, text)
+
+    async def _status(self, message: telethon.types.Message, text: str):
+        """Промежуточное «загрузка…»: в инлайн-режиме пропускаем (чтобы не плодить
+        лишние сообщения), в обычном — показываем как и раньше."""
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     @staticmethod
     def _to_bot_emoji(text: str) -> str:
@@ -2174,7 +2199,7 @@ class DragoYAMusicMod(loader.Module):
         now = await self._current_or_answer(message)
         if not now:
             return
-        await utils.answer(
+        await self._reply(
             message,
             f'<a href="{html.escape(now["url"], quote=True)}">{self._track_title(now)}</a>',
         )
@@ -2188,7 +2213,7 @@ class DragoYAMusicMod(loader.Module):
     )
     async def dacmd(self, message: telethon.types.Message):
         """Send current Yandex Music track as audio."""
-        await utils.answer(message, self.strings("downloading_track"))
+        await self._status(message, self.strings("downloading_track"))
         now = await self._current_or_answer(message)
         if not now:
             return
@@ -2196,7 +2221,7 @@ class DragoYAMusicMod(loader.Module):
         ym_client = await self._get_ym_client()
         audio = await self._download_track(ym_client, now["track_id"]) if ym_client else None
         if not audio:
-            return await utils.answer(message, self.strings("download_error"))
+            return await self._reply(message, self.strings("download_error"))
         audio.name = self._safe_track_name(now)
 
         await utils.answer(
@@ -2222,25 +2247,25 @@ class DragoYAMusicMod(loader.Module):
     async def dqcmd(self, message: telethon.types.Message):
         """<query> - search Yandex Music and send first track."""
         if not self._token():
-            return await utils.answer(message, self.strings("no_token"))
+            return await self._reply(message, self.strings("no_token"))
 
         query = utils.get_args_raw(message).strip()
         if not query:
-            return await utils.answer(message, self.strings("no_query"))
+            return await self._reply(message, self.strings("no_query"))
 
         ym_client = await self._get_ym_client()
         if not ym_client:
-            return await utils.answer(message, self.strings("bad_token"))
+            return await self._reply(message, self.strings("bad_token"))
 
         search = await ym_client.search(query, type_="track")
         if not getattr(search, "tracks", None) or not search.tracks.results:
-            return await utils.answer(message, self.strings("not_found"))
+            return await self._reply(message, self.strings("not_found"))
 
         track = search.tracks.results[0]
         now = self._build_now(track, paused=False, device="Search", volume="?")
 
         # инлайн-режим: показываем найденный трек одним сообщением от бота с кнопками
-        if self.config["use_inline"] and getattr(self, "inline", None):
+        if self._inline_on:
             return await self._send_track_inline(message, now)
 
         await utils.answer(message, (await self._render_text(now)) + "\n\n" + self.strings("downloading_track"))
@@ -2277,7 +2302,7 @@ class DragoYAMusicMod(loader.Module):
             return
         ym_client = await self._get_ym_client()
         await ym_client.users_likes_tracks_add(now["track_id"])
-        await utils.answer(
+        await self._reply(
             message,
             self.strings("liked").format(url=html.escape(now["url"], quote=True), track=self._track_title(now)),
         )
@@ -2296,7 +2321,7 @@ class DragoYAMusicMod(loader.Module):
             return
         ym_client = await self._get_ym_client()
         await ym_client.users_likes_tracks_remove(now["track_id"])
-        await utils.answer(
+        await self._reply(
             message,
             self.strings("unliked").format(url=html.escape(now["url"], quote=True), track=self._track_title(now)),
         )
@@ -2315,7 +2340,7 @@ class DragoYAMusicMod(loader.Module):
             return
         ym_client = await self._get_ym_client()
         await ym_client.users_dislikes_tracks_add(now["track_id"])
-        await utils.answer(
+        await self._reply(
             message,
             self.strings("disliked").format(url=html.escape(now["url"], quote=True), track=self._track_title(now)),
         )
@@ -2442,24 +2467,24 @@ class DragoYAMusicMod(loader.Module):
         try:
             text = await self._lyrics_text(ym_client, now["track_id"], "TEXT")
         except yandex_music.exceptions.NotFoundError:
-            return await utils.answer(
+            return await self._reply(
                 message,
                 self.strings("no_lyrics").format(url=html.escape(now["url"], quote=True), track=self._track_title(now)),
             )
         except Exception as e:
             logger.warning("Lyrics lookup failed: %s", e)
-            return await utils.answer(
+            return await self._reply(
                 message,
                 self.strings("no_lyrics").format(url=html.escape(now["url"], quote=True), track=self._track_title(now)),
             )
 
         if not text:
-            return await utils.answer(
+            return await self._reply(
                 message,
                 self.strings("no_lyrics").format(url=html.escape(now["url"], quote=True), track=self._track_title(now)),
             )
 
-        await utils.answer(
+        await self._reply(
             message,
             self.strings("lyrics").format(
                 url=html.escape(now["url"], quote=True),
@@ -2509,8 +2534,8 @@ class DragoYAMusicMod(loader.Module):
     async def dmcmd(self, message: telethon.types.Message):
         """Show safe player diagnostics without token."""
         if not self._token():
-            return await utils.answer(message, self.strings("no_token"))
-        await utils.answer(message, self.strings("debugging"))
+            return await self._reply(message, self.strings("no_token"))
+        await self._status(message, self.strings("debugging"))
 
         try:
             state = await self._ynison_state()
@@ -2527,4 +2552,4 @@ class DragoYAMusicMod(loader.Module):
         except Exception as e:
             text += f"\n<b>queue_fallback_error:</b> <code>{html.escape(type(e).__name__)}: {html.escape(str(e))}</code>"
 
-        await utils.answer(message, text)
+        await self._reply(message, text)
