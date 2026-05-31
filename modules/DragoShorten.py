@@ -1,9 +1,9 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 1, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
-# changelog: загрузка фото ответом → прямая ссылка (catbox/0x0), команда .shortimg
+# changelog: .shortimg берёт медиа из реплая ИЛИ из подписи к самому сообщению
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoShorten — короткие ссылки + заливка фото (без ключа).    ║
@@ -54,8 +54,8 @@ class DragoShortenMod(loader.Module):
         "expanded": "{emoji} <b>Полная ссылка:</b>\n<code>{full}</code>",
         "fail": "🚫 <b>Ошибка:</b> <code>{}</code>",
         "no_media": (
-            "🚫 <b>Ответь на фото/файл</b> командой <code>{p}shortimg</code>, "
-            "чтобы получить на него ссылку."
+            "🚫 <b>Нужно фото/файл.</b> Ответь командой <code>{p}shortimg</code> "
+            "на медиа или отправь его с подписью <code>{p}shortimg</code>."
         ),
         "uploading": "{emoji} <b>Загружаю файл…</b>",
         "img_result": (
@@ -227,8 +227,10 @@ class DragoShortenMod(loader.Module):
     @loader.command(ru_doc="ответом на фото/файл — получить прямую ссылку", alias="simg")
     async def shortimgcmd(self, message):
         """Reply to a photo/file — get a direct link"""
+        # медиа в самом сообщении (фото+команда в подписи) или в реплае
         reply = await message.get_reply_message()
-        if not reply or not reply.media:
+        source = message if message.media else (reply if reply and reply.media else None)
+        if source is None:
             return await utils.answer(
                 message, self.strings("no_media").format(p=self.get_prefix())
             )
@@ -236,7 +238,7 @@ class DragoShortenMod(loader.Module):
         emoji = self.config["emoji_link"]
         msg = await utils.answer(message, self.strings("uploading").format(emoji=emoji))
         try:
-            data = await reply.download_media(bytes)
+            data = await source.download_media(bytes)
         except Exception as exc:  # noqa: BLE001
             logger.exception("download failed: %s", exc)
             return await utils.answer(
@@ -244,8 +246,8 @@ class DragoShortenMod(loader.Module):
             )
 
         ext = ""
-        if getattr(reply, "file", None) and reply.file.ext:
-            ext = reply.file.ext
+        if getattr(source, "file", None) and source.file.ext:
+            ext = source.file.ext
         fname = f"upload{ext or '.jpg'}"
 
         # выбранный хостинг, затем второй как фолбэк
