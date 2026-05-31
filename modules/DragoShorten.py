@@ -1,14 +1,16 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
+# changelog: URL-кодирование параметра (фикс «database insert failed» на is.gd)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoShorten — короткие ссылки (is.gd / TinyURL, без ключа).  ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import logging
+from urllib.parse import quote
 
 import aiohttp
 
@@ -98,7 +100,7 @@ class DragoShortenMod(loader.Module):
 
         emoji = self.config["emoji_link"]
         msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
-        api = _SERVICES[self.config["service"]].format(url=utils.escape_html(url))
+        api = _SERVICES[self.config["service"]].format(url=quote(url, safe=""))
         try:
             status, body, _ = await self._get(api)
             if status >= 400 or not body.startswith("http"):
