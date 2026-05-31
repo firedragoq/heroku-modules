@@ -1,9 +1,9 @@
-__version__ = (1, 1, 1)
+__version__ = (1, 1, 2)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
-# changelog: диагностика .dpdbg + поддержка премиум-эмодзи в опросе
+# changelog: убрана диагностическая .dpdbg (премиум-эмодзи в опросе работают)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPoll — быстрые опросы/голосования в чате (нативный poll). ║
@@ -152,28 +152,6 @@ class DragoPollMod(loader.Module):
                 out.append((text, ents))
             idx += len(piece) + len(sep)
         return out
-
-    @loader.command(ru_doc="диагностика премиум-эмодзи в опросе")
-    async def dpdbgcmd(self, message: telethon.types.Message):
-        """Diagnostics: custom emoji entities in the command."""
-        try:
-            from telethon.tl.types import TextWithEntities  # noqa
-            has_twe = True
-        except Exception:  # noqa: BLE001
-            has_twe = False
-        ents = message.entities or []
-        custom = self._custom_emoji(message)
-        lines = [
-            f"TextWithEntities: <b>{has_twe}</b>",
-            f"всего entities: <b>{len(ents)}</b>",
-            f"custom_emoji: <b>{len(custom)}</b>",
-            f"raw_text: <code>{utils.escape_html(repr(message.raw_text))}</code>",
-        ]
-        for e in custom:
-            lines.append(
-                f"• offset={e.offset} len={e.length} id=<code>{e.document_id}</code>"
-            )
-        await utils.answer(message, "\n".join(lines))
 
     @loader.command(ru_doc="<вопрос> | <вар1> | <вар2> … — создать опрос")
     async def pollcmd(self, message: telethon.types.Message):
