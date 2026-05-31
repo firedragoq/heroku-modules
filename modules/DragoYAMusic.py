@@ -1,8 +1,8 @@
-__version__ = (2, 18, 3)
+__version__ = (2, 18, 4)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# changelog: заголовок умещается в одну строку (авто-уменьшение), не упирается в край
+# changelog: иконка 🎵 в каталоге (ведущий эмодзи в описании)
 # scope: heroku_min 1.7.2
 # requires: aiohttp pillow>=10.0.0 git+https://github.com/MarshalX/yandex-music-api
 
@@ -877,7 +877,7 @@ class FiredBanner:
 
 @loader.tds
 class DragoYAMusicMod(loader.Module):
-    """Yandex Music tools: current track, banner, audio, likes, lyrics and autobio."""
+    """🎵 Yandex Music tools: current track, banner, audio, likes, lyrics and autobio."""
 
     TRACK_EMOJI = "<emoji document_id=5350279866304445948>🔥</emoji>"
     DEVICE_EMOJI = "<emoji document_id=5348421451135336104>👾</emoji>"
@@ -888,7 +888,7 @@ class DragoYAMusicMod(loader.Module):
 
     strings = {
         "name": "DragoYAMusic",
-        "_cls_doc": "Yandex Music tools: current track, banner, audio, likes, lyrics and autobio.",
+        "_cls_doc": "🎵 Yandex Music tools: current track, banner, audio, likes, lyrics and autobio.",
         "guide": (
             "<b>DragoYAMusic by @firedragoq</b>\n\n"
             "<code>.dt TOKEN</code> / <code>.dyatoken</code> - save OAuth token\n"
@@ -939,7 +939,7 @@ class DragoYAMusicMod(loader.Module):
 
     strings_ru = {
         "name": "DragoYAMusic",
-        "_cls_doc": "Инструменты Яндекс Музыки: текущий трек, баннер, аудио, лайки, текст и autobio.",
+        "_cls_doc": "🎵 Инструменты Яндекс Музыки: текущий трек, баннер, аудио, лайки, текст и autobio.",
         "guide": (
             "<b>DragoYAMusic by @firedragoq</b>\n\n"
             "<code>.dt TOKEN</code> / <code>.dyatoken</code> - сохранить OAuth-токен\n"
