@@ -1,7 +1,8 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # scope: terminal_access_true
+# changelog: иконка 🪐 и описание в каталоге
 
 import asyncio
 import html
@@ -45,7 +46,12 @@ class ServerCodexMod(loader.Module):
 
     strings = {
         "name": "ServerCodex",
+        "_cls_doc": "🪐 Server Codex: AI-ядро управления сервером (Gemini/OpenRouter).",
         "info": "🪐 **Server Codex (v10.0.0)**\n🫶 **Разработчик: @firedragoq**",
+    }
+
+    strings_ru = {
+        "_cls_doc": "🪐 Server Codex: ИИ-ядро управления сервером (Gemini/OpenRouter).",
     }
 
     def __init__(self):
