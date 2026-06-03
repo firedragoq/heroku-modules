@@ -1,5 +1,5 @@
-__version__ = (2, 3, 2)
-# changelog: фикс ошибки прогресс-бара (длительность приходила строкой)
+__version__ = (2, 4, 0)
+# changelog: ретрай с backoff при таймауте Ynison (тихий повтор, warning вместо спама error)
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaLive.py
@@ -30,7 +30,27 @@ logger = logging.getLogger(__name__)
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
-async def get_current_track(client, token):
+async def get_current_track(client, token, retries: int = 2):
+    """Получает текущий трек с ретраями. Таймауты/обрывы — тихий повтор с backoff,
+    в лог уходит warning (а не error), чтобы не спамить при сетевых сбоях Ynison."""
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return await _get_current_track_once(client, token)
+        except (asyncio.TimeoutError, aiohttp.ClientError, ConnectionError) as e:
+            last_exc = e
+            if attempt < retries:
+                await asyncio.sleep(1.5 * (attempt + 1))  # backoff 1.5s, 3s
+                continue
+        except Exception as e:  # noqa: BLE001 — прочие ошибки не ретраим
+            logger.error(f"Failed to get current track: {e}")
+            return {"success": False}
+    logger.warning(f"Ynison недоступен после {retries + 1} попыток: {last_exc}")
+    return {"success": False}
+
+
+async def _get_current_track_once(client, token):
+    """Одна попытка получить трек. Исключения пробрасываются наверх для ретрая."""
     device_info = {"app_name": "Chrome", "type": 1}
     ws_proto = {
         "Ynison-Device-Id": "".join(
@@ -39,119 +59,114 @@ async def get_current_track(client, token):
         "Ynison-Device-Info": json.dumps(device_info),
     }
     timeout = aiohttp.ClientTimeout(total=15, connect=10)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.ws_connect(
-                url="wss://ynison.music.yandex.ru/redirector.YnisonRedirectService/GetRedirectToYnison",
-                headers={
-                    "Sec-WebSocket-Protocol": f"Bearer, v2, {json.dumps(ws_proto)}",
-                    "Origin": "http://music.yandex.ru",
-                    "Authorization": f"OAuth {token}",
-                },
-                timeout=10,
-            ) as ws:
-                recv = await ws.receive()
-                data = json.loads(recv.data)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.ws_connect(
+            url="wss://ynison.music.yandex.ru/redirector.YnisonRedirectService/GetRedirectToYnison",
+            headers={
+                "Sec-WebSocket-Protocol": f"Bearer, v2, {json.dumps(ws_proto)}",
+                "Origin": "http://music.yandex.ru",
+                "Authorization": f"OAuth {token}",
+            },
+            timeout=10,
+        ) as ws:
+            recv = await ws.receive()
+            data = json.loads(recv.data)
 
-            if "redirect_ticket" not in data or "host" not in data:
+        if "redirect_ticket" not in data or "host" not in data:
+            return {"success": False}
+
+        new_ws_proto = ws_proto.copy()
+        new_ws_proto["Ynison-Redirect-Ticket"] = data["redirect_ticket"]
+
+        to_send = {
+            "update_full_state": {
+                "player_state": {
+                    "player_queue": {
+                        "current_playable_index": -1,
+                        "entity_id": "",
+                        "entity_type": "VARIOUS",
+                        "playable_list": [],
+                        "options": {"repeat_mode": "NONE"},
+                        "entity_context": "BASED_ON_ENTITY_BY_DEFAULT",
+                        "version": {
+                            "device_id": ws_proto["Ynison-Device-Id"],
+                            "version": 9021243204784341000,
+                            "timestamp_ms": 0,
+                        },
+                        "from_optional": "",
+                    },
+                    "status": {
+                        "duration_ms": 0,
+                        "paused": True,
+                        "playback_speed": 1,
+                        "progress_ms": 0,
+                        "version": {
+                            "device_id": ws_proto["Ynison-Device-Id"],
+                            "version": 8321822175199937000,
+                            "timestamp_ms": 0,
+                        },
+                    },
+                },
+                "device": {
+                    "capabilities": {
+                        "can_be_player": True,
+                        "can_be_remote_controller": False,
+                        "volume_granularity": 16,
+                    },
+                    "info": {
+                        "device_id": ws_proto["Ynison-Device-Id"],
+                        "type": "WEB",
+                        "title": "Chrome Browser",
+                        "app_name": "Chrome",
+                    },
+                    "volume_info": {"volume": 0},
+                    "is_shadow": True,
+                },
+                "is_currently_active": False,
+            },
+            "rid": "ac281c26-a047-4419-ad00-e4fbfda1cba3",
+            "player_action_timestamp_ms": 0,
+            "activity_interception_type": "DO_NOT_INTERCEPT_BY_DEFAULT",
+        }
+
+        async with session.ws_connect(
+            url=f"wss://{data['host']}/ynison_state.YnisonStateService/PutYnisonState",
+            headers={
+                "Sec-WebSocket-Protocol": f"Bearer, v2, {json.dumps(new_ws_proto)}",
+                "Origin": "http://music.yandex.ru",
+                "Authorization": f"OAuth {token}",
+            },
+            timeout=10,
+            method="GET",
+        ) as ws:
+            await ws.send_str(json.dumps(to_send))
+            recv = await asyncio.wait_for(ws.receive(), timeout=10)
+            ynison = json.loads(recv.data)
+            track_index = ynison["player_state"]["player_queue"][
+                "current_playable_index"
+            ]
+            if track_index == -1:
                 return {"success": False}
 
-            new_ws_proto = ws_proto.copy()
-            new_ws_proto["Ynison-Redirect-Ticket"] = data["redirect_ticket"]
+            track = ynison["player_state"]["player_queue"]["playable_list"][
+                track_index
+            ]
 
-            to_send = {
-                "update_full_state": {
-                    "player_state": {
-                        "player_queue": {
-                            "current_playable_index": -1,
-                            "entity_id": "",
-                            "entity_type": "VARIOUS",
-                            "playable_list": [],
-                            "options": {"repeat_mode": "NONE"},
-                            "entity_context": "BASED_ON_ENTITY_BY_DEFAULT",
-                            "version": {
-                                "device_id": ws_proto["Ynison-Device-Id"],
-                                "version": 9021243204784341000,
-                                "timestamp_ms": 0,
-                            },
-                            "from_optional": "",
-                        },
-                        "status": {
-                            "duration_ms": 0,
-                            "paused": True,
-                            "playback_speed": 1,
-                            "progress_ms": 0,
-                            "version": {
-                                "device_id": ws_proto["Ynison-Device-Id"],
-                                "version": 8321822175199937000,
-                                "timestamp_ms": 0,
-                            },
-                        },
-                    },
-                    "device": {
-                        "capabilities": {
-                            "can_be_player": True,
-                            "can_be_remote_controller": False,
-                            "volume_granularity": 16,
-                        },
-                        "info": {
-                            "device_id": ws_proto["Ynison-Device-Id"],
-                            "type": "WEB",
-                            "title": "Chrome Browser",
-                            "app_name": "Chrome",
-                        },
-                        "volume_info": {"volume": 0},
-                        "is_shadow": True,
-                    },
-                    "is_currently_active": False,
-                },
-                "rid": "ac281c26-a047-4419-ad00-e4fbfda1cba3",
-                "player_action_timestamp_ms": 0,
-                "activity_interception_type": "DO_NOT_INTERCEPT_BY_DEFAULT",
-            }
+        await session.close()
+        track_full_info = await client.tracks(track["playable_id"])
 
-            async with session.ws_connect(
-                url=f"wss://{data['host']}/ynison_state.YnisonStateService/PutYnisonState",
-                headers={
-                    "Sec-WebSocket-Protocol": f"Bearer, v2, {json.dumps(new_ws_proto)}",
-                    "Origin": "http://music.yandex.ru",
-                    "Authorization": f"OAuth {token}",
-                },
-                timeout=10,
-                method="GET",
-            ) as ws:
-                await ws.send_str(json.dumps(to_send))
-                recv = await asyncio.wait_for(ws.receive(), timeout=10)
-                ynison = json.loads(recv.data)
-                track_index = ynison["player_state"]["player_queue"][
-                    "current_playable_index"
-                ]
-                if track_index == -1:
-                    return {"success": False}
-
-                track = ynison["player_state"]["player_queue"]["playable_list"][
-                    track_index
-                ]
-
-            await session.close()
-            track_full_info = await client.tracks(track["playable_id"])
-
-            return {
-                "paused": ynison["player_state"]["status"]["paused"],
-                "duration_ms": ynison["player_state"]["status"]["duration_ms"],
-                "progress_ms": ynison["player_state"]["status"]["progress_ms"],
-                "entity_id": ynison["player_state"]["player_queue"]["entity_id"],
-                "repeat_mode": ynison["player_state"]["player_queue"]["options"][
-                    "repeat_mode"
-                ],
-                "entity_type": ynison["player_state"]["player_queue"]["entity_type"],
-                "track": track_full_info,
-                "success": True,
-            }
-
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"Failed to get current track: {e}")
-        return {"success": False}
+        return {
+            "paused": ynison["player_state"]["status"]["paused"],
+            "duration_ms": ynison["player_state"]["status"]["duration_ms"],
+            "progress_ms": ynison["player_state"]["status"]["progress_ms"],
+            "entity_id": ynison["player_state"]["player_queue"]["entity_id"],
+            "repeat_mode": ynison["player_state"]["player_queue"]["options"][
+                "repeat_mode"
+            ],
+            "entity_type": ynison["player_state"]["player_queue"]["entity_type"],
+            "track": track_full_info,
+            "success": True,
+        }
 
 
 def _to_int(v) -> int:
