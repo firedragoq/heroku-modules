@@ -1,0 +1,284 @@
+__version__ = (1, 0, 0)
+
+# meta developer: @dragomodules
+# meta category: Сеть и сайты
+# scope: heroku_only
+# requires: aiohttp
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+import logging
+
+import aiohttp
+
+from .. import loader, utils
+
+logger = logging.getLogger(__name__)
+
+CG = "https://api.coingecko.com/api/v3"
+FIAT = "https://open.er-api.com/v6/latest/{base}"
+
+# частые тикеры → id CoinGecko (чтобы не дёргать поиск на популярных)
+_KNOWN = {
+    "btc": "bitcoin", "eth": "ethereum", "usdt": "tether", "bnb": "binancecoin",
+    "sol": "solana", "xrp": "ripple", "usdc": "usd-coin", "ada": "cardano",
+    "doge": "dogecoin", "trx": "tron", "ton": "the-open-network", "dot": "polkadot",
+    "matic": "matic-network", "ltc": "litecoin", "shib": "shiba-inu",
+    "avax": "avalanche-2", "link": "chainlink", "xmr": "monero", "near": "near",
+}
+
+# распространённые фиат-коды (для распознавания .conv)
+_FIAT_CODES = {
+    "usd", "eur", "rub", "uah", "kzt", "byn", "gbp", "jpy", "cny", "try",
+    "pln", "czk", "chf", "cad", "aud", "inr", "brl", "amd", "gel", "azn",
+}
+
+
+@loader.tds
+class DragoCryptoMod(loader.Module):
+    """💰 Курсы криптовалют и конвертация валют (без API-ключей)."""
+
+    strings = {
+        "name": "DragoCrypto",
+        "no_args_price": (
+            "🚫 <b>Укажи монету.</b> Пример: <code>{p}price btc</code> "
+            "или <code>{p}price eth sol ton</code>."
+        ),
+        "no_args_conv": (
+            "🚫 <b>Формат:</b> <code>{p}conv 100 usd rub</code> "
+            "или <code>{p}conv 0.5 btc usd</code>."
+        ),
+        "loading": "{emoji} <b>Запрашиваю курс…</b>",
+        "not_found": "🚫 <b>Не найдено:</b> <code>{}</code>",
+        "fail": "🚫 <b>Ошибка:</b> <code>{}</code>",
+        "price_head": "{emoji} <b>Курсы криптовалют</b>",
+        "price_row": (
+            "{e} <b>{name}</b> <code>{sym}</code>\n"
+            "    {cur1}  ·  {chg}"
+        ),
+        "conv_result": "{emoji} <b>{amount} {src}</b> = <b>{result} {dst}</b>",
+    }
+
+    strings_ru = {
+        "_cls_doc": "💰 Курсы криптовалют и конвертация валют (без API-ключей).",
+        "pricecmd_doc": "<монета…> — курс криптовалюты",
+        "convcmd_doc": "<сумма> <из> <в> — конвертация валют/крипты",
+        "no_args_price": (
+            "🚫 <b>Укажи монету.</b> Пример: <code>{p}price btc</code> "
+            "или <code>{p}price eth sol ton</code>."
+        ),
+        "no_args_conv": (
+            "🚫 <b>Формат:</b> <code>{p}conv 100 usd rub</code> "
+            "или <code>{p}conv 0.5 btc usd</code>."
+        ),
+        "loading": "{emoji} <b>Запрашиваю курс…</b>",
+        "not_found": "🚫 <b>Не найдено:</b> <code>{}</code>",
+        "fail": "🚫 <b>Ошибка:</b> <code>{}</code>",
+        "price_head": "{emoji} <b>Курсы криптовалют</b>",
+        "price_row": (
+            "{e} <b>{name}</b> <code>{sym}</code>\n"
+            "    {cur1}  ·  {chg}"
+        ),
+        "conv_result": "{emoji} <b>{amount} {src}</b> = <b>{result} {dst}</b>",
+    }
+
+    def __init__(self):
+        self.config = loader.ModuleConfig(
+            loader.ConfigValue(
+                "vs_currency",
+                "usd",
+                "Основная валюта котировок (usd, rub, eur…).",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_crypto",
+                "💰",
+                "Эмодзи заголовка. Можно премиум (шлётся от аккаунта).",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_up",
+                "📈",
+                "Эмодзи роста за 24ч.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_down",
+                "📉",
+                "Эмодзи падения за 24ч.",
+                validator=loader.validators.String(),
+            ),
+        )
+
+    # ── HTTP ────────────────────────────────────────────────────
+    async def _get_json(self, url: str, params: dict | None = None):
+        timeout = aiohttp.ClientTimeout(total=25)
+        headers = {"User-Agent": "DragoCrypto", "Accept": "application/json"}
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
+            async with s.get(url, params=params) as r:
+                r.raise_for_status()
+                return await r.json(content_type=None)
+
+    async def _resolve_id(self, ticker: str) -> str | None:
+        """Тикер/имя → CoinGecko id."""
+        t = ticker.lower().strip()
+        if t in _KNOWN:
+            return _KNOWN[t]
+        try:
+            data = await self._get_json(f"{CG}/search", {"query": t})
+        except Exception:  # noqa: BLE001
+            return None
+        coins = data.get("coins") or []
+        if not coins:
+            return None
+        # точное совпадение по символу — приоритетно
+        for c in coins:
+            if c.get("symbol", "").lower() == t:
+                return c.get("id")
+        return coins[0].get("id")
+
+    @staticmethod
+    def _fmt(num: float) -> str:
+        if num >= 1:
+            return f"{num:,.2f}".replace(",", " ")
+        return f"{num:.6f}".rstrip("0").rstrip(".")
+
+    # ── .price ──────────────────────────────────────────────────
+    @loader.command(ru_doc="<монета…> — курс криптовалюты", alias="p")
+    async def pricecmd(self, message):
+        """<coin…> — crypto price"""
+        args = utils.get_args_raw(message).strip()
+        if not args:
+            return await utils.answer(
+                message, self.strings("no_args_price").format(p=self.get_prefix())
+            )
+
+        emoji = self.config["emoji_crypto"]
+        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+
+        vs = self.config["vs_currency"].lower()
+        tickers = args.split()[:10]
+        ids = {}
+        for t in tickers:
+            cid = await self._resolve_id(t)
+            if cid:
+                ids[cid] = t
+        if not ids:
+            return await utils.answer(message, self.strings("not_found").format(
+                utils.escape_html(args)))
+
+        try:
+            data = await self._get_json(
+                f"{CG}/coins/markets",
+                {"vs_currency": vs, "ids": ",".join(ids), "price_change_percentage": "24h"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("price failed: %s", exc)
+            return await utils.answer(message, self.strings("fail").format(
+                utils.escape_html(str(exc))))
+
+        rows = [self.strings("price_head").format(emoji=emoji), ""]
+        cur_sign = vs.upper()
+        for c in data:
+            price = c.get("current_price") or 0
+            chg = c.get("price_change_percentage_24h")
+            if chg is None:
+                chg_str = "—"
+            else:
+                arrow = self.config["emoji_up"] if chg >= 0 else self.config["emoji_down"]
+                chg_str = f"{arrow} {chg:+.2f}%"
+            rows.append(self.strings("price_row").format(
+                e="🪙",
+                name=utils.escape_html(c.get("name", "?")),
+                sym=utils.escape_html((c.get("symbol", "") or "").upper()),
+                cur1=f"{self._fmt(price)} {cur_sign}",
+                chg=chg_str,
+            ))
+        await utils.answer(message, "\n".join(rows))
+
+    # ── .conv ───────────────────────────────────────────────────
+    @loader.command(ru_doc="<сумма> <из> <в> — конвертация", alias="conv")
+    async def convertcmd(self, message):
+        """<amount> <from> <to> — convert currencies/crypto"""
+        parts = utils.get_args_raw(message).split()
+        if len(parts) < 3:
+            return await utils.answer(
+                message, self.strings("no_args_conv").format(p=self.get_prefix())
+            )
+        try:
+            amount = float(parts[0].replace(",", "."))
+        except ValueError:
+            return await utils.answer(
+                message, self.strings("no_args_conv").format(p=self.get_prefix())
+            )
+        src, dst = parts[1].lower(), parts[2].lower()
+
+        emoji = self.config["emoji_crypto"]
+        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+        try:
+            result = await self._convert(amount, src, dst)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("convert failed: %s", exc)
+            return await utils.answer(message, self.strings("fail").format(
+                utils.escape_html(str(exc))))
+        if result is None:
+            return await utils.answer(message, self.strings("not_found").format(
+                f"{utils.escape_html(src)}→{utils.escape_html(dst)}"))
+
+        await utils.answer(
+            message,
+            self.strings("conv_result").format(
+                emoji=emoji,
+                amount=self._fmt(amount),
+                src=src.upper(),
+                result=self._fmt(result),
+                dst=dst.upper(),
+            ),
+        )
+
+    async def _convert(self, amount: float, src: str, dst: str) -> float | None:
+        src_fiat = src in _FIAT_CODES
+        dst_fiat = dst in _FIAT_CODES
+
+        if src_fiat and dst_fiat:
+            data = await self._get_json(FIAT.format(base=src.upper()))
+            rate = (data.get("rates") or {}).get(dst.upper())
+            return amount * rate if rate else None
+
+        # хотя бы одна сторона — крипта: считаем через общую vs-валюту (usd)
+        async def crypto_usd(ticker: str) -> float | None:
+            cid = await self._resolve_id(ticker)
+            if not cid:
+                return None
+            d = await self._get_json(
+                f"{CG}/simple/price", {"ids": cid, "vs_currencies": "usd"}
+            )
+            return (d.get(cid) or {}).get("usd")
+
+        async def fiat_per_usd(code: str) -> float | None:
+            if code == "usd":
+                return 1.0
+            d = await self._get_json(FIAT.format(base="USD"))
+            return (d.get("rates") or {}).get(code.upper())
+
+        # стоимость 1 src в usd
+        if src_fiat:
+            r = await fiat_per_usd(src)
+            src_in_usd = 1 / r if r else None
+        else:
+            src_in_usd = await crypto_usd(src)
+        if not src_in_usd:
+            return None
+
+        # стоимость 1 dst в usd
+        if dst_fiat:
+            r = await fiat_per_usd(dst)
+            dst_in_usd = 1 / r if r else None
+        else:
+            dst_in_usd = await crypto_usd(dst)
+        if not dst_in_usd:
+            return None
+
+        return amount * src_in_usd / dst_in_usd
