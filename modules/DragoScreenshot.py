@@ -1,8 +1,9 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
+# changelog: инлайн-режим (use_inline) — скриншот одним сообщением от бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoScreenshot — скриншот сайта (thum.io / mshots, без ключа).║
@@ -10,6 +11,7 @@ __version__ = (1, 0, 0)
 
 import io
 import logging
+import re
 from urllib.parse import quote
 
 import aiohttp
@@ -17,6 +19,16 @@ import aiohttp
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 
 @loader.tds
@@ -75,7 +87,30 @@ class DragoScreenshotMod(loader.Module):
                 "Эмодзи скриншота. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять скриншот через инлайн-бота (одним сообщением от бота).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     def _build_url(self, url: str) -> str:
         width = int(self.config["width"])
@@ -111,28 +146,39 @@ class DragoScreenshotMod(loader.Module):
         if url and not url.startswith("http"):
             url = "https://" + url
         if not url:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_url").format(p=self.get_prefix())
             )
 
         emoji = self.config["emoji_shot"]
-        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
-        try:
-            data = await self._fetch(self._build_url(url))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("screenshot failed: %s", exc)
-            return await utils.answer(
-                msg, self.strings("fail").format(utils.escape_html(str(exc)))
-            )
-
-        if len(data) < 2048:
-            return await utils.answer(msg, self.strings("too_small"))
-
-        img = io.BytesIO(data)
-        img.name = "screenshot.png"
+        shot_url = self._build_url(url)
         caption = self.strings("caption").format(
             emoji=emoji, url=utils.escape_html(url[:120])
         )
+
+        # инлайн-режим: отдаём URL скриншота боту напрямую (он сам его подтянет)
+        if self._inline_on:
+            try:
+                return await self.inline.form(
+                    message=message, text=_to_bot_emoji(caption), photo=shot_url
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline shot failed, fallback: %s", exc)
+
+        await self._status(message, self.strings("loading").format(emoji=emoji))
+        try:
+            data = await self._fetch(shot_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("screenshot failed: %s", exc)
+            return await self._reply(
+                message, self.strings("fail").format(utils.escape_html(str(exc)))
+            )
+
+        if len(data) < 2048:
+            return await self._reply(message, self.strings("too_small"))
+
+        img = io.BytesIO(data)
+        img.name = "screenshot.png"
         await utils.answer(
             message,
             caption,
