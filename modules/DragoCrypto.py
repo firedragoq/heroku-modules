@@ -1,10 +1,10 @@
-__version__ = (1, 5, 0)
+__version__ = (1, 5, 1)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: инлайн-режим (use_inline) для карточек .price/.conv
+# changelog: use_inline маршрутизирует ВСЕ ответы .price/.conv через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
@@ -225,6 +225,24 @@ class DragoCryptoMod(loader.Module):
             return f"{num:,.2f}".replace(",", " ")
         return f"{num:.6f}".rstrip("0").rstrip(".")
 
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        """Текстовый ответ: инлайн-бот (use_inline) или utils.answer."""
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
+
     async def _send_card(self, message, img, caption: str):
         """Шлёт картинку-карточку: через инлайн-бота (use_inline) или от аккаунта."""
         if self.config["use_inline"] and getattr(self, "inline", None):
@@ -378,12 +396,12 @@ class DragoCryptoMod(loader.Module):
         """<coin…> — crypto price"""
         args = utils.get_args_raw(message).strip()
         if not args:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_args_price").format(p=self.get_prefix())
             )
 
         emoji = self.config["emoji_crypto"]
-        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+        await self._status(message, self.strings("loading").format(emoji=emoji))
 
         vs = self.config["vs_currency"].lower()
         tickers = args.split()[:10]
@@ -393,7 +411,7 @@ class DragoCryptoMod(loader.Module):
             if cid:
                 ids[cid] = t
         if not ids:
-            return await utils.answer(message, self.strings("not_found").format(
+            return await self._reply(message, self.strings("not_found").format(
                 utils.escape_html(args)))
 
         try:
@@ -408,7 +426,7 @@ class DragoCryptoMod(loader.Module):
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("price failed: %s", exc)
-            return await utils.answer(message, self.strings("fail").format(
+            return await self._reply(message, self.strings("fail").format(
                 utils.escape_html(str(exc))))
 
         cur_sign = vs.upper()
@@ -439,7 +457,7 @@ class DragoCryptoMod(loader.Module):
                 cur1=f"{self._fmt(price)} {cur_sign}",
                 chg=chg_str,
             ))
-        await utils.answer(message, "\n".join(rows))
+        await self._reply(message, "\n".join(rows))
 
     # ── .conv ───────────────────────────────────────────────────
     @loader.command(ru_doc="<сумма> <из> <в> — конвертация", alias="conv")
@@ -447,27 +465,27 @@ class DragoCryptoMod(loader.Module):
         """<amount> <from> <to> — convert currencies/crypto"""
         parts = utils.get_args_raw(message).split()
         if len(parts) < 3:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_args_conv").format(p=self.get_prefix())
             )
         try:
             amount = float(parts[0].replace(",", "."))
         except ValueError:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_args_conv").format(p=self.get_prefix())
             )
         src, dst = parts[1].lower(), parts[2].lower()
 
         emoji = self.config["emoji_crypto"]
-        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+        await self._status(message, self.strings("loading").format(emoji=emoji))
         try:
             result = await self._convert(amount, src, dst)
         except Exception as exc:  # noqa: BLE001
             logger.exception("convert failed: %s", exc)
-            return await utils.answer(message, self.strings("fail").format(
+            return await self._reply(message, self.strings("fail").format(
                 utils.escape_html(str(exc))))
         if result is None:
-            return await utils.answer(message, self.strings("not_found").format(
+            return await self._reply(message, self.strings("not_found").format(
                 f"{utils.escape_html(src)}→{utils.escape_html(dst)}"))
 
         # картинкой, если включено и PIL доступен
@@ -487,7 +505,7 @@ class DragoCryptoMod(loader.Module):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("conv image render failed, fallback to text: %s", exc)
 
-        await utils.answer(
+        await self._reply(
             message,
             self.strings("conv_result").format(
                 emoji=emoji,
