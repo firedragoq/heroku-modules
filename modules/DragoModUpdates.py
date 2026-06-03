@@ -1,9 +1,9 @@
-__version__ = (1, 6, 0)
+__version__ = (1, 6, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: список модулей берётся у бота (не GitHub API) — нет 403 rate limit
+# changelog: служебные сообщения обмена списком удаляются из ЛС
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -377,14 +377,20 @@ class DragoModUpdatesMod(loader.Module):
             return (cached[1] if cached else {})
 
         self._list_future = asyncio.get_event_loop().create_future()
+        req_msg = None
         try:
-            await self._client.send_message(uname, LIST_REQUEST)
+            req_msg = await self._client.send_message(uname, LIST_REQUEST)
             payload = await asyncio.wait_for(self._list_future, timeout=20)
         except Exception as exc:  # noqa: BLE001
             logger.warning("catalog from bot failed: %s", exc)
             return (cached[1] if cached else {})
         finally:
             self._list_future = None
+            if req_msg is not None:
+                try:
+                    await req_msg.delete()
+                except Exception:  # noqa: BLE001
+                    pass
 
         catalog = {
             item["name"]: {"url": item.get("url", ""), "version": item.get("version", "")}
@@ -628,6 +634,10 @@ class DragoModUpdatesMod(loader.Module):
                     fut.set_result(payload)
                 except Exception as exc:  # noqa: BLE001
                     fut.set_exception(exc)
+            try:
+                await message.delete()  # чистим служебный ответ из ЛС
+            except Exception:  # noqa: BLE001
+                pass
             return
 
         if not self.config["auto_install"]:
