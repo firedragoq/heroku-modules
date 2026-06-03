@@ -1,9 +1,9 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 2, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
-# changelog: премиум-эмодзи для иконок настраиваются в конфиге
+# changelog: инлайн-режим (use_inline) — ответ через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoSpeedtest — тест скорости сети сервера (Cloudflare).     ║
@@ -12,6 +12,7 @@ __version__ = (1, 1, 0)
 
 import asyncio
 import logging
+import re
 import time
 
 import aiohttp
@@ -19,6 +20,16 @@ import aiohttp
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 DOWN_URL = "https://speed.cloudflare.com/__down?bytes={n}"
 UP_URL = "https://speed.cloudflare.com/__up"
@@ -114,7 +125,30 @@ class DragoSpeedtestMod(loader.Module):
                 "Эмодзи сервера. Можно премиум.",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять ответ через инлайн-бота (от бота, а не аккаунта).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     async def _ping(self, session) -> tuple[float, str]:
         """Средний RTT по нескольким запросам + дата-центр Cloudflare."""
@@ -156,7 +190,7 @@ class DragoSpeedtestMod(loader.Module):
     @loader.command(ru_doc="Замерить скорость сети сервера", alias="spt")
     async def speedtestcmd(self, message):
         """Measure server network speed"""
-        msg = await utils.answer(message, self.strings("running"))
+        await self._status(message, self.strings("running"))
         timeout = aiohttp.ClientTimeout(total=120)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -165,11 +199,11 @@ class DragoSpeedtestMod(loader.Module):
                 up = await self._upload(session)
         except Exception as exc:  # noqa: BLE001
             logger.exception("speedtest failed: %s", exc)
-            return await utils.answer(message, self.strings("fail").format(exc))
+            return await self._reply(message, self.strings("fail").format(exc))
 
         scale = float(self.config["scale_mbps"])
-        await utils.answer(
-            msg,
+        await self._reply(
+            message,
             self.strings("result").format(
                 titem=self.config["emoji_title"],
                 demoji=_speed_emoji(down),
