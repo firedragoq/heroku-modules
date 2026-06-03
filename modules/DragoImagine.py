@@ -1,10 +1,10 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 1, 1)
 
 # meta developer: @dragomodules
 # meta category: ИИ и текст
 # scope: heroku_only
 # requires: aiohttp
-# changelog: Pollinations закрыл анонимный доступ — добавлен бесплатный токен в конфиг
+# changelog: ссылка enter.pollinations.ai; премиум-эмодзи 🌄 по умолчанию
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoImagine — генерация картинок по тексту (Pollinations).   ║
@@ -50,7 +50,7 @@ class DragoImagineMod(loader.Module):
         "fail": "🚫 <b>Не удалось сгенерировать:</b> <code>{}</code>",
         "no_token": (
             "🔑 <b>Pollinations закрыл бесплатный доступ без токена.</b>\n\n"
-            "1. Зайди на <code>auth.pollinations.ai</code> (вход через GitHub) — бесплатно.\n"
+            "1. Зайди на <code>enter.pollinations.ai</code> (вход через GitHub) — бесплатно.\n"
             "2. Создай токен и впиши его в <code>{p}cfg DragoImagine</code> → <b>token</b>.\n"
             "После этого <code>{p}img</code> заработает."
         ),
@@ -68,7 +68,7 @@ class DragoImagineMod(loader.Module):
         "fail": "🚫 <b>Не удалось сгенерировать:</b> <code>{}</code>",
         "no_token": (
             "🔑 <b>Pollinations закрыл бесплатный доступ без токена.</b>\n\n"
-            "1. Зайди на <code>auth.pollinations.ai</code> (вход через GitHub) — бесплатно.\n"
+            "1. Зайди на <code>enter.pollinations.ai</code> (вход через GitHub) — бесплатно.\n"
             "2. Создай токен и впиши его в <code>{p}cfg DragoImagine</code> → <b>token</b>.\n"
             "После этого <code>{p}img</code> заработает."
         ),
@@ -79,7 +79,7 @@ class DragoImagineMod(loader.Module):
             loader.ConfigValue(
                 "token",
                 "",
-                "Токен Pollinations (бесплатно: auth.pollinations.ai).",
+                "Токен Pollinations (бесплатно: enter.pollinations.ai).",
                 validator=loader.validators.Hidden(),
             ),
             loader.ConfigValue(
@@ -110,7 +110,7 @@ class DragoImagineMod(loader.Module):
             ),
             loader.ConfigValue(
                 "emoji_art",
-                "🎨",
+                "<emoji document_id=5260441902230050374>🌄</emoji>",
                 "Эмодзи модуля. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
