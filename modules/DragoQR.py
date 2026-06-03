@@ -1,9 +1,9 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 1, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: qrcode pillow aiohttp
-# changelog: инлайн-режим (use_inline) — QR одним сообщением от бота
+# changelog: use_inline маршрутизирует и .qrread через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoQR — генерация и чтение QR-кодов.                        ║
@@ -88,6 +88,23 @@ class DragoQRMod(loader.Module):
             ),
         )
 
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
+
     @loader.command(ru_doc="<текст> — сделать QR-код", alias="qrgen")
     async def qrcmd(self, message):
         """<text> — generate a QR code"""
@@ -98,7 +115,7 @@ class DragoQRMod(loader.Module):
         if not text and reply and reply.raw_text:
             text = reply.raw_text
         if not text:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_text").format(p=self.get_prefix())
             )
 
@@ -140,8 +157,8 @@ class DragoQRMod(loader.Module):
         """Read QR from a replied image"""
         reply = await message.get_reply_message()
         if not reply or not reply.photo and not reply.document:
-            return await utils.answer(message, self.strings("no_photo"))
-        msg = await utils.answer(message, self.strings("reading"))
+            return await self._reply(message, self.strings("no_photo"))
+        await self._status(message, self.strings("reading"))
         try:
             img_bytes = await reply.download_media(bytes)
             form = aiohttp.FormData()
@@ -153,13 +170,13 @@ class DragoQRMod(loader.Module):
             symbol = data[0]["symbol"][0]
             content = symbol.get("data")
             if not content:
-                return await utils.answer(msg, self.strings("read_fail"))
-            await utils.answer(
-                msg,
+                return await self._reply(message, self.strings("read_fail"))
+            await self._reply(
+                message,
                 self.strings("read_result").format(
                     emoji=self.config["emoji_qr"], data=utils.escape_html(content)
                 ),
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("qr read failed: %s", exc)
-            await utils.answer(msg, self.strings("fail").format(exc))
+            await self._reply(message, self.strings("fail").format(exc))
