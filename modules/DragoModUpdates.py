@@ -1,9 +1,9 @@
-__version__ = (1, 5, 7)
+__version__ = (1, 6, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: кэш списка модулей репо (фикс 403 rate limit GitHub при нажатии кнопок меню)
+# changelog: список модулей берётся у бота (не GitHub API) — нет 403 rate limit
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -11,6 +11,7 @@ __version__ = (1, 5, 7)
 # ║  сам себя из репозитория.                                      ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+import asyncio
 import inspect
 import json
 import logging
@@ -28,9 +29,12 @@ logger = logging.getLogger(__name__)
 # Должно совпадать с INSTALL_MARKER в боте (bot/handlers/user.py)
 INSTALL_MARKER = "#HerokuModInstall"
 
+# обмен списком модулей с ботом (бот — источник ссылок, без GitHub API)
+LIST_REQUEST = "#DragoModListReq"
+LIST_RESULT = "#DragoModListRes"
+
 # репозиторий модулей DragoModules
 _REPO = "firedragoq/heroku-modules"
-_REPO_API = f"https://api.github.com/repos/{_REPO}/contents/modules?ref=main"
 _RAW_BASE = f"https://raw.githubusercontent.com/{_REPO}/main/modules"
 
 # Версия запущенного модуля — для сравнения с версией в репозитории
@@ -189,7 +193,8 @@ class DragoModUpdatesMod(loader.Module):
     async def client_ready(self, client, db):
         self._client = client
         self._db = db
-        self._repo_cache = None  # (timestamp, [names]) — кэш списка модулей репо
+        self._catalog_cache = None  # (timestamp, {name: {...}}) — каталог от бота
+        self._list_future = None    # ожидание ответа бота со списком
         await self._resolve_bot()
 
     def _bot_uname(self) -> str:
@@ -360,29 +365,40 @@ class DragoModUpdatesMod(loader.Module):
         d[name] = list(ver)
         self._db.set(self.strings["name"], "installed_versions", d)
 
-    async def _repo_modules(self, force: bool = False) -> list:
-        """Список имён модулей в репозитории (без .py). Кэшируется на 5 минут,
-        чтобы повторные нажатия кнопок не упирались в лимит GitHub API."""
+    async def _catalog_from_bot(self, force: bool = False) -> dict:
+        """Просит у бота каталог {имя: {url, version}}. Кэш 5 мин. Без GitHub API."""
         now = time.time()
-        cached = getattr(self, "_repo_cache", None)
+        cached = getattr(self, "_catalog_cache", None)
         if not force and cached and now - cached[0] < 300:
             return cached[1]
-        data = json.loads(await self._fetch(_REPO_API))
-        names = [
-            item["name"][:-3]
-            for item in data
-            if isinstance(item, dict)
-            and item.get("type") == "file"
-            and item.get("name", "").endswith(".py")
-        ]
-        self._repo_cache = (now, names)
-        return names
+
+        uname = self._bot_uname()
+        if not uname:
+            return (cached[1] if cached else {})
+
+        self._list_future = asyncio.get_event_loop().create_future()
+        try:
+            await self._client.send_message(uname, LIST_REQUEST)
+            payload = await asyncio.wait_for(self._list_future, timeout=20)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("catalog from bot failed: %s", exc)
+            return (cached[1] if cached else {})
+        finally:
+            self._list_future = None
+
+        catalog = {
+            item["name"]: {"url": item.get("url", ""), "version": item.get("version", "")}
+            for item in payload
+            if item.get("name") and item.get("url")
+        }
+        self._catalog_cache = (now, catalog)
+        return catalog
 
     async def _installed_drago(self) -> list:
-        """Установленные модули, которые есть в репозитории (имена, отсортированы)."""
-        names = await self._repo_modules()
+        """Установленные модули из каталога бота (имена, отсортированы)."""
+        catalog = await self._catalog_from_bot()
         return sorted(
-            n for n in names
+            n for n in catalog
             if n != self.strings["name"] and self.lookup(n) is not None
         )
 
@@ -392,6 +408,7 @@ class DragoModUpdatesMod(loader.Module):
         Возвращает список (имя, старая, новая). Сообщения не шлёт — это делает вызвавший.
         """
         targets = list(only) if only is not None else self._enabled()
+        catalog = await self._catalog_from_bot()
         updated = []
         for name in targets:
             if name == self.strings["name"]:
@@ -403,7 +420,9 @@ class DragoModUpdatesMod(loader.Module):
             if local is None:  # не прочиталась — берём из нашей записи
                 rec = self._installed_db().get(name)
                 local = tuple(rec) if rec else None
-            url = f"{_RAW_BASE}/{name}.py?t={int(time.time())}"
+            # ссылку берём из каталога бота, иначе — raw по имени
+            url = (catalog.get(name) or {}).get("url") or f"{_RAW_BASE}/{name}.py"
+            url = f"{url}{'&' if '?' in url else '?'}t={int(time.time())}"
             try:
                 src = await self._fetch(url)
             except Exception as exc:  # noqa: BLE001
@@ -590,9 +609,7 @@ class DragoModUpdatesMod(loader.Module):
 
     @loader.watcher(only_messages=True)
     async def watcher(self, message: Message):
-        """Ловит служебные сообщения от бота и ставит модули."""
-        if not self.config["auto_install"]:
-            return
+        """Ловит служебные сообщения от бота: ответ со списком и установку модулей."""
         if getattr(message, "out", False):
             return
         if self._bot_id is None:
@@ -601,6 +618,20 @@ class DragoModUpdatesMod(loader.Module):
         if self._bot_id and sender_id != self._bot_id:
             return
         text = message.raw_text or ""
+
+        # ответ бота со списком модулей (для меню автообновления)
+        if text.startswith(LIST_RESULT):
+            fut = getattr(self, "_list_future", None)
+            if fut and not fut.done():
+                try:
+                    payload = json.loads(text[len(LIST_RESULT):].strip())
+                    fut.set_result(payload)
+                except Exception as exc:  # noqa: BLE001
+                    fut.set_exception(exc)
+            return
+
+        if not self.config["auto_install"]:
+            return
         if INSTALL_MARKER not in text:
             return
         # формат: "#HerokuModInstall\n<url>"
