@@ -1,9 +1,10 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
 # requires: telethon
+# changelog: премиум-эмодзи 🔔 по умолчанию
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoTagAll — тегнуть всех участников чата порциями.          ║
@@ -82,7 +83,7 @@ class DragoTagAllMod(loader.Module):
             ),
             loader.ConfigValue(
                 "emoji_tag",
-                "📢",
+                "<emoji document_id=5258261274319432461>🔔</emoji>",
                 "Эмодзи перед текстом. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
