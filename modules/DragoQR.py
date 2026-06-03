@@ -1,8 +1,9 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: qrcode pillow aiohttp
+# changelog: инлайн-режим (use_inline) — QR одним сообщением от бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoQR — генерация и чтение QR-кодов.                        ║
@@ -10,12 +11,26 @@ __version__ = (1, 0, 0)
 
 import io
 import logging
+import re
+from urllib.parse import quote
 
 import aiohttp
 
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+CREATE_API = "https://api.qrserver.com/v1/create-qr-code/?size=500x500&margin=10&data={data}"
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 try:
     import qrcode
@@ -65,6 +80,12 @@ class DragoQRMod(loader.Module):
                 "Эмодзи QR. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять QR через инлайн-бота (одним сообщением от бота).",
+                validator=loader.validators.Boolean(),
+            ),
         )
 
     @loader.command(ru_doc="<текст> — сделать QR-код", alias="qrgen")
@@ -80,6 +101,21 @@ class DragoQRMod(loader.Module):
             return await utils.answer(
                 message, self.strings("no_text").format(p=self.get_prefix())
             )
+
+        # инлайн-режим: QR одним сообщением от бота (картинка по URL qrserver)
+        if self.config["use_inline"] and getattr(self, "inline", None):
+            try:
+                caption = _to_bot_emoji(
+                    self.strings("caption").format(emoji=self.config["emoji_qr"])
+                )
+                return await self.inline.form(
+                    message=message,
+                    text=caption,
+                    photo=CREATE_API.format(data=quote(text, safe="")),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline qr failed, fallback: %s", exc)
+
         msg = await utils.answer(message, self.strings("gen"))
         try:
             qr = qrcode.QRCode(border=2, box_size=10)
