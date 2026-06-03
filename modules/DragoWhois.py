@@ -1,24 +1,32 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 3, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
-# requires: aiohttp
-# changelog: инлайн-режим (use_inline) — ответы .whois/.ip через инлайн-бота
+# requires: aiohttp pillow
+# changelog: команда .netcard — инфо по домену/IP красивой картинкой
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoWhois — инфо по домену и IP (whois, гео, провайдер).     ║
-# ║  Без API-ключей.                                               ║
+# ║  Текстом или картинкой-карточкой. Без API-ключей.             ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+import io
 import logging
 import re
 
 import aiohttp
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:  # noqa: BLE001
+    Image = None
+
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+_FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 
 
 def _to_bot_emoji(text: str) -> str:
@@ -30,7 +38,31 @@ def _to_bot_emoji(text: str) -> str:
         flags=re.DOTALL,
     )
 
-RDAP = "https://rdap.org/domain/{domain}"
+
+async def _upload_image(data: bytes) -> str | None:
+    """Заливает картинку на catbox→0x0, возвращает URL (для инлайн-формы)."""
+    headers = {"User-Agent": "Mozilla/5.0 (DragoWhois)"}
+    timeout = aiohttp.ClientTimeout(total=30)
+    hosts = [
+        ("https://catbox.moe/user/api.php", "fileToUpload", {"reqtype": "fileupload"}),
+        ("https://0x0.st", "file", {}),
+    ]
+    for url, field, extra in hosts:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
+                form = aiohttp.FormData()
+                for k, v in extra.items():
+                    form.add_field(k, v)
+                form.add_field(field, data, filename="net.png")
+                async with s.post(url, data=form) as r:
+                    body = (await r.text()).strip()
+                    if body.startswith("http"):
+                        return body
+        except Exception as e:  # noqa: BLE001
+            logger.warning("net image upload via %s failed: %s", url, e)
+    return None
+
+WHOIS = "https://who-dat.as93.net/{domain}"
 IPAPI = "http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,regionName,city,isp,org,as,query,reverse,timezone,mobile,proxy,hosting&lang=ru"
 
 _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
@@ -141,12 +173,74 @@ class DragoWhoisMod(loader.Module):
             async with s.get(url) as r:
                 return r.status, await r.json(content_type=None)
 
-    @staticmethod
-    def _events(data: dict, action: str) -> str:
-        for ev in data.get("events", []) or []:
-            if ev.get("eventAction") == action:
-                return (ev.get("eventDate", "") or "")[:10]
-        return "—"
+    # ── рендер карточки-картинки ────────────────────────────────
+    def _font(self, name: str, size: int):
+        try:
+            return ImageFont.truetype(_FONT_DIR + name, size)
+        except Exception:  # noqa: BLE001
+            return ImageFont.load_default()
+
+    def _render_card(self, kind: str, title: str, subtitle: str, rows: list) -> io.BytesIO:
+        """kind: 'domain'|'ip'. rows: список (label, value)."""
+        f_title = self._font("DejaVuSans-Bold.ttf", 34)
+        f_sub = self._font("DejaVuSans.ttf", 18)
+        f_key = self._font("DejaVuSans-Bold.ttf", 20)
+        f_val = self._font("DejaVuSans.ttf", 20)
+
+        pad = 40
+        row_h = 46
+        W = 900
+        H = pad + 56 + 14 + len(rows) * row_h + pad
+
+        img = Image.new("RGB", (W, H), (18, 20, 30))
+        d = ImageDraw.Draw(img)
+        # фон: разный акцент для домена/IP
+        if kind == "ip":
+            top, bot, accent = (20, 24, 40), (34, 28, 52), (120, 170, 255)
+        else:
+            top, bot, accent = (18, 26, 28), (26, 40, 38), (120, 220, 170)
+        for y in range(H):
+            t = y / H
+            d.line([(0, y), (W, y)],
+                   fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
+
+        muted = (140, 148, 178)
+        white = (228, 232, 248)
+        key_col = (170, 178, 210)
+
+        d.text((pad, pad), title, font=f_title, fill=accent)
+        if subtitle:
+            d.text((pad, pad + 40), subtitle, font=f_sub, fill=muted)
+
+        y = pad + 56 + 14
+        d.line([(pad, y - 10), (W - pad, y - 10)], fill=(60, 66, 92), width=2)
+        for label, value in rows:
+            d.text((pad, y), label, font=f_key, fill=key_col)
+            val = str(value)
+            if len(val) > 58:
+                val = val[:57] + "…"
+            d.text((pad + 270, y), val, font=f_val, fill=white)
+            y += row_h
+            d.line([(pad, y - 10), (W - pad, y - 10)], fill=(40, 44, 64), width=1)
+
+        buf = io.BytesIO()
+        buf.name = "dragonet.png"
+        img.save(buf, "PNG")
+        buf.seek(0)
+        return buf
+
+    async def _send_card(self, message, img, caption: str):
+        if self._inline_on:
+            url = await _upload_image(img.getvalue())
+            if url:
+                try:
+                    return await self.inline.form(
+                        message=message, text=_to_bot_emoji(caption), photo=url
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("inline card failed, fallback: %s", exc)
+        img.seek(0)
+        await utils.answer(message=message, response=caption, file=img)
 
     @loader.command(ru_doc="<домен> — whois домена", alias="domain")
     async def whoiscmd(self, message):
@@ -160,8 +254,8 @@ class DragoWhoisMod(loader.Module):
             )
         await self._status(message, self.strings("loading").format(emoji=emoji))
         try:
-            status, data = await self._get_json(RDAP.format(domain=arg))
-            if status >= 400 or not isinstance(data, dict) or "ldhName" not in data:
+            status, data = await self._get_json(WHOIS.format(domain=arg))
+            if status >= 400 or not isinstance(data, dict) or not data.get("isRegistered"):
                 return await self._reply(message, self.strings("not_found").format(
                     utils.escape_html(arg)))
         except Exception as exc:  # noqa: BLE001
@@ -169,29 +263,24 @@ class DragoWhoisMod(loader.Module):
             return await self._reply(message, self.strings("fail").format(
                 utils.escape_html(str(exc))))
 
-        registrar = "—"
-        for ent in data.get("entities", []) or []:
-            if "registrar" in (ent.get("roles") or []):
-                vcard = ent.get("vcardArray", [])
-                if len(vcard) > 1:
-                    for item in vcard[1]:
-                        if item and item[0] == "fn":
-                            registrar = item[3]
-                            break
+        registrar = (data.get("registrar") or {}).get("name") or "—"
         statuses = ", ".join(data.get("status", []) or []) or "—"
-        ns_list = [n.get("ldhName", "") for n in data.get("nameservers", []) or []]
+        dates = data.get("dates") or {}
+        created = (dates.get("created") or "—")[:10]
+        expires = (dates.get("expires") or "—")[:10]
+        ns_list = [n.get("name", "") for n in data.get("nameservers", []) or []]
         ns = "\n".join(f"  • <code>{utils.escape_html(n.lower())}</code>" for n in ns_list) or "  —"
 
         await self._reply(
             message,
             self.strings("domain_card").format(
                 emoji=emoji,
-                domain=utils.escape_html(data.get("ldhName", arg).lower()),
+                domain=utils.escape_html(data.get("domain", arg).lower()),
                 e_reg="🏢", registrar=utils.escape_html(registrar),
                 e_status="📊", status=utils.escape_html(statuses),
                 e_date="📅",
-                created=self._events(data, "registration"),
-                expires=self._events(data, "expiration"),
+                created=created,
+                expires=expires,
                 e_ns="🖧", ns=ns,
             ),
         )
@@ -244,3 +333,68 @@ class DragoWhoisMod(loader.Module):
                 flags=flags_line,
             ),
         )
+
+    @loader.command(ru_doc="<домен|ip> — инфо картинкой", alias="netimg")
+    async def netcardcmd(self, message):
+        """<domain|ip> — domain/IP info as an image card"""
+        emoji = self.config["emoji_net"]
+        if Image is None:
+            return await self._reply(message, "🚫 <b>Pillow не установлен.</b>")
+        arg = utils.get_args_raw(message).strip()
+        arg = _CLEAN.sub("", arg).split("/")[0]
+        if not arg:
+            return await self._reply(
+                message, self.strings("no_arg").format(emoji=emoji, p=self.get_prefix())
+            )
+        await self._status(message, self.strings("loading").format(emoji=emoji))
+
+        try:
+            if _IP_RE.match(arg):
+                _, data = await self._get_json(IPAPI.format(ip=arg))
+                if not isinstance(data, dict) or data.get("status") != "success":
+                    return await self._reply(message, self.strings("not_found").format(
+                        utils.escape_html(arg)))
+                flags = []
+                if data.get("hosting"):
+                    flags.append("хостинг/ЦОД")
+                if data.get("proxy"):
+                    flags.append("прокси/VPN")
+                if data.get("mobile"):
+                    flags.append("моб. сеть")
+                rows = [
+                    ("📍 Страна", f"{data.get('country','—')} ({data.get('countryCode','—')})"),
+                    ("🏙 Регион", f"{data.get('regionName','—')}, {data.get('city','—')}"),
+                    ("🌐 Провайдер", data.get("isp", "—")),
+                    ("🏢 Организация", data.get("org", "—")),
+                    ("🔗 AS", data.get("as", "—")),
+                    ("↩️ PTR", data.get("reverse") or "—"),
+                    ("🕒 Таймзона", data.get("timezone", "—")),
+                    ("⚑ Метки", " · ".join(flags) or "—"),
+                ]
+                img = self._render_card("ip", data.get("query", arg), "IP-адрес", rows)
+                caption = f"{emoji} <b>IP</b> <code>{utils.escape_html(data.get('query', arg))}</code>"
+            else:
+                arg = arg.lower()
+                status, data = await self._get_json(WHOIS.format(domain=arg))
+                if status >= 400 or not isinstance(data, dict) or not data.get("isRegistered"):
+                    return await self._reply(message, self.strings("not_found").format(
+                        utils.escape_html(arg)))
+                dates = data.get("dates") or {}
+                ns_list = [n.get("name", "") for n in data.get("nameservers", []) or []]
+                rows = [
+                    ("🏢 Регистратор", (data.get("registrar") or {}).get("name") or "—"),
+                    ("📊 Статус", ", ".join(data.get("status", []) or []) or "—"),
+                    ("📅 Создан", (dates.get("created") or "—")[:10]),
+                    ("📅 Истекает", (dates.get("expires") or "—")[:10]),
+                    ("🔒 DNSSEC", "да" if (data.get("dnssec") or {}).get("signed") else "нет"),
+                    ("🖧 NS", ", ".join(n.lower() for n in ns_list) or "—"),
+                ]
+                dom = data.get("domain", arg).lower()
+                img = self._render_card("domain", dom, "Домен", rows)
+                caption = f"{emoji} <b>Домен</b> <code>{utils.escape_html(dom)}</code>"
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("netcard failed: %s", exc)
+            return await self._reply(message, self.strings("fail").format(
+                utils.escape_html(str(exc))))
+
+        await self._send_card(message, img, caption)
