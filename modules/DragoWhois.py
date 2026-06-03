@@ -1,10 +1,10 @@
-__version__ = (1, 3, 0)
+__version__ = (1, 3, 1)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: команда .netcard — инфо по домену/IP красивой картинкой
+# changelog: логотипы из сети в .netcard (фавикон сайта/флаг страны), без битых эмодзи
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoWhois — инфо по домену и IP (whois, гео, провайдер).     ║
@@ -180,8 +180,24 @@ class DragoWhoisMod(loader.Module):
         except Exception:  # noqa: BLE001
             return ImageFont.load_default()
 
-    def _render_card(self, kind: str, title: str, subtitle: str, rows: list) -> io.BytesIO:
-        """kind: 'domain'|'ip'. rows: список (label, value)."""
+    async def _fetch_bytes(self, url: str) -> bytes | None:
+        """Качает картинку-иконку (фавикон/флаг) из интернета."""
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            headers = {"User-Agent": "Mozilla/5.0 (DragoWhois)"}
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
+                async with s.get(url) as r:
+                    if r.status == 200:
+                        data = await r.read()
+                        if len(data) > 200:
+                            return data
+        except Exception as e:  # noqa: BLE001
+            logger.debug("icon fetch failed %s: %s", url, e)
+        return None
+
+    def _render_card(self, kind: str, title: str, subtitle: str, rows: list,
+                     logo: bytes = None) -> io.BytesIO:
+        """kind: 'domain'|'ip'. rows: список (label, value). logo: PNG-иконка из сети."""
         f_title = self._font("DejaVuSans-Bold.ttf", 34)
         f_sub = self._font("DejaVuSans.ttf", 18)
         f_key = self._font("DejaVuSans-Bold.ttf", 20)
@@ -190,11 +206,11 @@ class DragoWhoisMod(loader.Module):
         pad = 40
         row_h = 46
         W = 900
-        H = pad + 56 + 14 + len(rows) * row_h + pad
+        head_h = 96  # высота шапки с логотипом
+        H = pad + head_h + 14 + len(rows) * row_h + pad
 
         img = Image.new("RGB", (W, H), (18, 20, 30))
         d = ImageDraw.Draw(img)
-        # фон: разный акцент для домена/IP
         if kind == "ip":
             top, bot, accent = (20, 24, 40), (34, 28, 52), (120, 170, 255)
         else:
@@ -208,18 +224,33 @@ class DragoWhoisMod(loader.Module):
         white = (228, 232, 248)
         key_col = (170, 178, 210)
 
-        d.text((pad, pad), title, font=f_title, fill=accent)
-        if subtitle:
-            d.text((pad, pad + 40), subtitle, font=f_sub, fill=muted)
+        # логотип из интернета (фавикон сайта / флаг страны) в шапке слева
+        text_x = pad
+        if logo:
+            try:
+                ic = Image.open(io.BytesIO(logo)).convert("RGBA")
+                box = head_h - 8
+                ic.thumbnail((box, box), Image.LANCZOS)
+                iy = pad + (head_h - ic.height) // 2
+                img.paste(ic, (pad, iy), ic)
+                text_x = pad + box + 22
+            except Exception as e:  # noqa: BLE001
+                logger.debug("logo paste failed: %s", e)
 
-        y = pad + 56 + 14
+        d.text((text_x, pad + 14), title, font=f_title, fill=accent)
+        if subtitle:
+            d.text((text_x, pad + 56), subtitle, font=f_sub, fill=muted)
+
+        y = pad + head_h + 14
         d.line([(pad, y - 10), (W - pad, y - 10)], fill=(60, 66, 92), width=2)
         for label, value in rows:
-            d.text((pad, y), label, font=f_key, fill=key_col)
+            # аккуратный акцентный маркер вместо битого эмодзи
+            d.rounded_rectangle([pad, y + 6, pad + 8, y + 22], 3, fill=accent)
+            d.text((pad + 22, y), label, font=f_key, fill=key_col)
             val = str(value)
             if len(val) > 58:
                 val = val[:57] + "…"
-            d.text((pad + 270, y), val, font=f_val, fill=white)
+            d.text((pad + 290, y), val, font=f_val, fill=white)
             y += row_h
             d.line([(pad, y - 10), (W - pad, y - 10)], fill=(40, 44, 64), width=1)
 
@@ -362,16 +393,18 @@ class DragoWhoisMod(loader.Module):
                 if data.get("mobile"):
                     flags.append("моб. сеть")
                 rows = [
-                    ("📍 Страна", f"{data.get('country','—')} ({data.get('countryCode','—')})"),
-                    ("🏙 Регион", f"{data.get('regionName','—')}, {data.get('city','—')}"),
-                    ("🌐 Провайдер", data.get("isp", "—")),
-                    ("🏢 Организация", data.get("org", "—")),
-                    ("🔗 AS", data.get("as", "—")),
-                    ("↩️ PTR", data.get("reverse") or "—"),
-                    ("🕒 Таймзона", data.get("timezone", "—")),
-                    ("⚑ Метки", " · ".join(flags) or "—"),
+                    ("Страна", f"{data.get('country','—')} ({data.get('countryCode','—')})"),
+                    ("Регион", f"{data.get('regionName','—')}, {data.get('city','—')}"),
+                    ("Провайдер", data.get("isp", "—")),
+                    ("Организация", data.get("org", "—")),
+                    ("AS", data.get("as", "—")),
+                    ("PTR", data.get("reverse") or "—"),
+                    ("Таймзона", data.get("timezone", "—")),
+                    ("Метки", " · ".join(flags) or "—"),
                 ]
-                img = self._render_card("ip", data.get("query", arg), "IP-адрес", rows)
+                cc = (data.get("countryCode") or "").lower()
+                logo = await self._fetch_bytes(f"https://flagcdn.com/w160/{cc}.png") if cc else None
+                img = self._render_card("ip", data.get("query", arg), "IP-адрес", rows, logo)
                 caption = f"{emoji} <b>IP</b> <code>{utils.escape_html(data.get('query', arg))}</code>"
             else:
                 arg = arg.lower()
@@ -382,15 +415,18 @@ class DragoWhoisMod(loader.Module):
                 dates = data.get("dates") or {}
                 ns_list = [n.get("name", "") for n in data.get("nameservers", []) or []]
                 rows = [
-                    ("🏢 Регистратор", (data.get("registrar") or {}).get("name") or "—"),
-                    ("📊 Статус", ", ".join(data.get("status", []) or []) or "—"),
-                    ("📅 Создан", (dates.get("created") or "—")[:10]),
-                    ("📅 Истекает", (dates.get("expires") or "—")[:10]),
-                    ("🔒 DNSSEC", "да" if (data.get("dnssec") or {}).get("signed") else "нет"),
-                    ("🖧 NS", ", ".join(n.lower() for n in ns_list) or "—"),
+                    ("Регистратор", (data.get("registrar") or {}).get("name") or "—"),
+                    ("Статус", ", ".join(data.get("status", []) or []) or "—"),
+                    ("Создан", (dates.get("created") or "—")[:10]),
+                    ("Истекает", (dates.get("expires") or "—")[:10]),
+                    ("DNSSEC", "да" if (data.get("dnssec") or {}).get("signed") else "нет"),
+                    ("NS", ", ".join(n.lower() for n in ns_list) or "—"),
                 ]
                 dom = data.get("domain", arg).lower()
-                img = self._render_card("domain", dom, "Домен", rows)
+                logo = await self._fetch_bytes(
+                    f"https://www.google.com/s2/favicons?domain={dom}&sz=128"
+                )
+                img = self._render_card("domain", dom, "Домен", rows, logo)
                 caption = f"{emoji} <b>Домен</b> <code>{utils.escape_html(dom)}</code>"
         except Exception as exc:  # noqa: BLE001
             logger.exception("netcard failed: %s", exc)
