@@ -1,10 +1,10 @@
-__version__ = (1, 3, 1)
+__version__ = (1, 3, 2)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: логотипы из сети в .netcard (фавикон сайта/флаг страны), без битых эмодзи
+# changelog: цветные иконки на строках (Icons8) + фавикон/флаг в .netcard
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoWhois — инфо по домену и IP (whois, гео, провайдер).     ║
@@ -195,9 +195,32 @@ class DragoWhoisMod(loader.Module):
             logger.debug("icon fetch failed %s: %s", url, e)
         return None
 
+    async def _icon(self, name: str) -> bytes | None:
+        """Цветная PNG-иконка Icons8 (с кешем в памяти)."""
+        cache = getattr(self, "_icon_cache", None)
+        if cache is None:
+            cache = self._icon_cache = {}
+        if name in cache:
+            return cache[name]
+        data = await self._fetch_bytes(f"https://img.icons8.com/fluency/48/{name}.png")
+        cache[name] = data
+        return data
+
+    async def _favicon(self, domain: str) -> bytes | None:
+        """Фавикон сайта: DuckDuckGo → Google (что вернётся первым)."""
+        for url in (
+            f"https://icons.duckduckgo.com/ip3/{domain}.ico",
+            f"https://www.google.com/s2/favicons?domain={domain}&sz=128",
+        ):
+            data = await self._fetch_bytes(url)
+            if data:
+                return data
+        return None
+
     def _render_card(self, kind: str, title: str, subtitle: str, rows: list,
-                     logo: bytes = None) -> io.BytesIO:
-        """kind: 'domain'|'ip'. rows: список (label, value). logo: PNG-иконка из сети."""
+                     logo: bytes = None, icons: dict = None) -> io.BytesIO:
+        """kind: 'domain'|'ip'. rows: (icon_name, label, value). icons: {name: png}."""
+        icons = icons or {}
         f_title = self._font("DejaVuSans-Bold.ttf", 34)
         f_sub = self._font("DejaVuSans.ttf", 18)
         f_key = self._font("DejaVuSans-Bold.ttf", 20)
@@ -243,14 +266,24 @@ class DragoWhoisMod(loader.Module):
 
         y = pad + head_h + 14
         d.line([(pad, y - 10), (W - pad, y - 10)], fill=(60, 66, 92), width=2)
-        for label, value in rows:
-            # аккуратный акцентный маркер вместо битого эмодзи
-            d.rounded_rectangle([pad, y + 6, pad + 8, y + 22], 3, fill=accent)
-            d.text((pad + 22, y), label, font=f_key, fill=key_col)
+        ic_sz = 28
+        for icon_name, label, value in rows:
+            # цветная иконка из интернета (или акцентный маркер, если не загрузилась)
+            png = icons.get(icon_name)
+            if png:
+                try:
+                    ic = Image.open(io.BytesIO(png)).convert("RGBA")
+                    ic.thumbnail((ic_sz, ic_sz), Image.LANCZOS)
+                    img.paste(ic, (pad, y + (28 - ic.height) // 2 + 2), ic)
+                except Exception:  # noqa: BLE001
+                    d.rounded_rectangle([pad, y + 6, pad + 8, y + 22], 3, fill=accent)
+            else:
+                d.rounded_rectangle([pad, y + 6, pad + 8, y + 22], 3, fill=accent)
+            d.text((pad + ic_sz + 14, y), label, font=f_key, fill=key_col)
             val = str(value)
-            if len(val) > 58:
-                val = val[:57] + "…"
-            d.text((pad + 290, y), val, font=f_val, fill=white)
+            if len(val) > 56:
+                val = val[:55] + "…"
+            d.text((pad + 300, y), val, font=f_val, fill=white)
             y += row_h
             d.line([(pad, y - 10), (W - pad, y - 10)], fill=(40, 44, 64), width=1)
 
@@ -393,18 +426,19 @@ class DragoWhoisMod(loader.Module):
                 if data.get("mobile"):
                     flags.append("моб. сеть")
                 rows = [
-                    ("Страна", f"{data.get('country','—')} ({data.get('countryCode','—')})"),
-                    ("Регион", f"{data.get('regionName','—')}, {data.get('city','—')}"),
-                    ("Провайдер", data.get("isp", "—")),
-                    ("Организация", data.get("org", "—")),
-                    ("AS", data.get("as", "—")),
-                    ("PTR", data.get("reverse") or "—"),
-                    ("Таймзона", data.get("timezone", "—")),
-                    ("Метки", " · ".join(flags) or "—"),
+                    ("worldwide-location", "Страна", f"{data.get('country','—')} ({data.get('countryCode','—')})"),
+                    ("map-marker", "Регион", f"{data.get('regionName','—')}, {data.get('city','—')}"),
+                    ("internet", "Провайдер", data.get("isp", "—")),
+                    ("company", "Организация", data.get("org", "—")),
+                    ("domain", "AS", data.get("as", "—")),
+                    ("server", "PTR", data.get("reverse") or "—"),
+                    ("calendar", "Таймзона", data.get("timezone", "—")),
+                    ("info", "Метки", " · ".join(flags) or "—"),
                 ]
                 cc = (data.get("countryCode") or "").lower()
                 logo = await self._fetch_bytes(f"https://flagcdn.com/w160/{cc}.png") if cc else None
-                img = self._render_card("ip", data.get("query", arg), "IP-адрес", rows, logo)
+                icons = await self._collect_icons(rows)
+                img = self._render_card("ip", data.get("query", arg), "IP-адрес", rows, logo, icons)
                 caption = f"{emoji} <b>IP</b> <code>{utils.escape_html(data.get('query', arg))}</code>"
             else:
                 arg = arg.lower()
@@ -415,18 +449,17 @@ class DragoWhoisMod(loader.Module):
                 dates = data.get("dates") or {}
                 ns_list = [n.get("name", "") for n in data.get("nameservers", []) or []]
                 rows = [
-                    ("Регистратор", (data.get("registrar") or {}).get("name") or "—"),
-                    ("Статус", ", ".join(data.get("status", []) or []) or "—"),
-                    ("Создан", (dates.get("created") or "—")[:10]),
-                    ("Истекает", (dates.get("expires") or "—")[:10]),
-                    ("DNSSEC", "да" if (data.get("dnssec") or {}).get("signed") else "нет"),
-                    ("NS", ", ".join(n.lower() for n in ns_list) or "—"),
+                    ("company", "Регистратор", (data.get("registrar") or {}).get("name") or "—"),
+                    ("id-verified", "Статус", ", ".join(data.get("status", []) or []) or "—"),
+                    ("calendar", "Создан", (dates.get("created") or "—")[:10]),
+                    ("expired", "Истекает", (dates.get("expires") or "—")[:10]),
+                    ("certificate", "DNSSEC", "да" if (data.get("dnssec") or {}).get("signed") else "нет"),
+                    ("server", "NS", ", ".join(n.lower() for n in ns_list) or "—"),
                 ]
                 dom = data.get("domain", arg).lower()
-                logo = await self._fetch_bytes(
-                    f"https://www.google.com/s2/favicons?domain={dom}&sz=128"
-                )
-                img = self._render_card("domain", dom, "Домен", rows, logo)
+                logo = await self._favicon(dom)
+                icons = await self._collect_icons(rows)
+                img = self._render_card("domain", dom, "Домен", rows, logo, icons)
                 caption = f"{emoji} <b>Домен</b> <code>{utils.escape_html(dom)}</code>"
         except Exception as exc:  # noqa: BLE001
             logger.exception("netcard failed: %s", exc)
@@ -434,3 +467,11 @@ class DragoWhoisMod(loader.Module):
                 utils.escape_html(str(exc))))
 
         await self._send_card(message, img, caption)
+
+    async def _collect_icons(self, rows: list) -> dict:
+        """Предзагружает PNG-иконки для всех строк карточки (с кешем)."""
+        icons = {}
+        for icon_name, *_ in rows:
+            if icon_name not in icons:
+                icons[icon_name] = await self._icon(icon_name)
+        return icons
