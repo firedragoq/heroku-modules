@@ -1,20 +1,32 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
+# changelog: инлайн-режим (use_inline) — ответ через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoWeather — погода по городу через wttr.in (без ключа).    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import logging
+import re
 
 import aiohttp
 
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 API = "https://wttr.in/{city}?format=j1&lang=ru"
 
@@ -121,7 +133,30 @@ class DragoWeatherMod(loader.Module):
                 "emoji_forecast", "📅", "Эмодзи прогноза. Можно премиум.",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять ответ через инлайн-бота (от бота, а не аккаунта).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     async def _fetch(self, city: str) -> dict | None:
         timeout = aiohttp.ClientTimeout(total=20)
@@ -140,17 +175,17 @@ class DragoWeatherMod(loader.Module):
         """<city> — get weather"""
         city = utils.get_args_raw(message).strip() or self.config["default_city"]
         if not city:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_city").format(self.get_prefix())
             )
-        msg = await utils.answer(message, self.strings("loading"))
+        await self._status(message, self.strings("loading"))
         try:
             data = await self._fetch(city)
         except Exception as exc:  # noqa: BLE001
             logger.exception("weather failed: %s", exc)
-            return await utils.answer(msg, self.strings("fail").format(exc))
+            return await self._reply(message, self.strings("fail").format(exc))
         if not data or not data.get("current_condition"):
-            return await utils.answer(msg, self.strings("not_found"))
+            return await self._reply(message, self.strings("not_found"))
 
         cur = data["current_condition"][0]
         area = (data.get("nearest_area") or [{}])[0]
@@ -171,8 +206,8 @@ class DragoWeatherMod(loader.Module):
         elif cur.get("weatherDesc"):
             desc = cur["weatherDesc"][0]["value"]
 
-        await utils.answer(
-            msg,
+        await self._reply(
+            message,
             self.strings("card").format(
                 wemoji=_weather_emoji(cur.get("weatherCode", "")),
                 place=utils.escape_html(place),
