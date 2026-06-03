@@ -1,9 +1,9 @@
-__version__ = (1, 5, 1)
+__version__ = (1, 5, 2)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: премиум-эмодзи в заголовке инлайн-меню автообновления
+# changelog: премиум-иконки на кнопках меню автообновления (emoji_id у выбранных + «Обновить»)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -455,8 +455,15 @@ class DragoModUpdatesMod(loader.Module):
         enabled = set(self._enabled())
         rows, row = [], []
         for n in installed:
-            mark = "✅" if n in enabled else "⬜️"
-            row.append({"text": f"{mark} {n}", "callback": self._au_toggle, "args": (n,)})
+            on = n in enabled
+            btn = {
+                "text": f"{n}" if on else f"⬜️ {n}",
+                "callback": self._au_toggle,
+                "args": (n,),
+            }
+            if on:  # премиум-галочка иконкой кнопки
+                btn["emoji_id"] = "5258387825530807373"
+            row.append(btn)
             if len(row) == 2:
                 rows.append(row)
                 row = []
@@ -465,7 +472,11 @@ class DragoModUpdatesMod(loader.Module):
         if not installed:
             rows.append([{"text": "Нет установленных модулей", "action": "close"}])
         rows.append([
-            {"text": "🔄 Обновить выбранные", "callback": self._au_update_now},
+            {
+                "text": "Обновить выбранные",
+                "callback": self._au_update_now,
+                "emoji_id": "5260375398956442465",  # 🔄
+            },
             {"text": "❌ Закрыть", "action": "close"},
         ])
         return rows
