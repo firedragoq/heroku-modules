@@ -1,21 +1,31 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
-# requires: aiohttp
+# requires: aiohttp pillow
+# changelog: курсы можно отправлять картинкой-карточкой (config as_image)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
+# ║  Опционально — красивая карточка-картинка с курсами.           ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+import io
 import logging
 
 import aiohttp
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except Exception:  # noqa: BLE001
+    Image = None
+
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+_FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 
 CG = "https://api.coingecko.com/api/v3"
 FIAT = "https://open.er-api.com/v6/latest/{base}"
@@ -110,6 +120,12 @@ class DragoCryptoMod(loader.Module):
                 "Эмодзи падения за 24ч.",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "as_image",
+                False,
+                "Отправлять курсы (.price) картинкой-карточкой вместо текста.",
+                validator=loader.validators.Boolean(),
+            ),
         )
 
     # ── HTTP ────────────────────────────────────────────────────
@@ -145,6 +161,76 @@ class DragoCryptoMod(loader.Module):
             return f"{num:,.2f}".replace(",", " ")
         return f"{num:.6f}".rstrip("0").rstrip(".")
 
+    # ── рендер картинки ─────────────────────────────────────────
+    def _font(self, name: str, size: int):
+        try:
+            return ImageFont.truetype(_FONT_DIR + name, size)
+        except Exception:  # noqa: BLE001
+            return ImageFont.load_default()
+
+    def _render_image(self, coins: list, cur_sign: str) -> io.BytesIO:
+        f_title = self._font("DejaVuSans-Bold.ttf", 34)
+        f_sub = self._font("DejaVuSans.ttf", 18)
+        f_name = self._font("DejaVuSans-Bold.ttf", 26)
+        f_sym = self._font("DejaVuSansMono.ttf", 18)
+        f_price = self._font("DejaVuSansMono-Bold.ttf", 26)
+        f_chg = self._font("DejaVuSans-Bold.ttf", 20)
+
+        pad = 36
+        row_h = 78
+        W = 820
+        H = pad + 60 + 16 + len(coins) * row_h + pad
+
+        img = Image.new("RGB", (W, H), (20, 22, 33))
+        d = ImageDraw.Draw(img)
+        top, bot = (24, 26, 38), (40, 33, 58)
+        for y in range(H):
+            t = y / H
+            d.line([(0, y), (W, y)],
+                   fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
+
+        accent = (240, 185, 66)
+        muted = (130, 138, 170)
+        white = (228, 232, 248)
+        up_col = (118, 201, 124)
+        down_col = (240, 110, 120)
+
+        d.text((pad, pad), "DragoCrypto", font=f_title, fill=accent)
+        d.text((pad, pad + 40), f"Курсы · {cur_sign}", font=f_sub, fill=muted)
+
+        y = pad + 60 + 16
+        d.line([(pad, y - 10), (W - pad, y - 10)], fill=(60, 64, 88), width=2)
+        for c in coins:
+            price = c.get("current_price") or 0
+            chg = c.get("price_change_percentage_24h")
+            name = c.get("name", "?")
+            sym = (c.get("symbol", "") or "").upper()
+
+            d.text((pad, y + 6), name, font=f_name, fill=white)
+            d.text((pad, y + 40), sym, font=f_sym, fill=muted)
+
+            price_txt = f"{self._fmt(price)} {cur_sign}"
+            pw = d.textlength(price_txt, font=f_price)
+            d.text((W - pad - pw, y + 6), price_txt, font=f_price, fill=white)
+
+            if chg is None:
+                chg_txt, col = "—", muted
+            else:
+                arrow = "▲" if chg >= 0 else "▼"
+                chg_txt = f"{arrow} {chg:+.2f}%"
+                col = up_col if chg >= 0 else down_col
+            cw = d.textlength(chg_txt, font=f_chg)
+            d.text((W - pad - cw, y + 42), chg_txt, font=f_chg, fill=col)
+
+            y += row_h
+            d.line([(pad, y - 14), (W - pad, y - 14)], fill=(44, 48, 68), width=1)
+
+        buf = io.BytesIO()
+        buf.name = "dragocrypto.png"
+        img.save(buf, "PNG")
+        buf.seek(0)
+        return buf
+
     # ── .price ──────────────────────────────────────────────────
     @loader.command(ru_doc="<монета…> — курс криптовалюты", alias="p")
     async def pricecmd(self, message):
@@ -179,8 +265,21 @@ class DragoCryptoMod(loader.Module):
             return await utils.answer(message, self.strings("fail").format(
                 utils.escape_html(str(exc))))
 
-        rows = [self.strings("price_head").format(emoji=emoji), ""]
         cur_sign = vs.upper()
+
+        # картинкой, если включено и PIL доступен
+        if self.config["as_image"] and Image is not None:
+            try:
+                img = self._render_image(data, cur_sign)
+                return await utils.answer(
+                    message=message,
+                    response=self.strings("price_head").format(emoji=emoji),
+                    file=img,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("image render failed, fallback to text: %s", exc)
+
+        rows = [self.strings("price_head").format(emoji=emoji), ""]
         for c in data:
             price = c.get("current_price") or 0
             chg = c.get("price_change_percentage_24h")
