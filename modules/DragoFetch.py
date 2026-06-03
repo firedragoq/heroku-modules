@@ -1,9 +1,9 @@
-__version__ = (1, 3, 0)
+__version__ = (1, 3, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: psutil pillow aiohttp
-# changelog: инлайн-режим (use_inline) для .fetchimg — карточка одним сообщением от бота
+# changelog: use_inline теперь маршрутизирует ВСЕ команды через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoFetch — красивая системная инфа (fastfetch/neofetch)     ║
@@ -418,28 +418,47 @@ class DragoFetchMod(loader.Module):
         buf.seek(0)
         return buf
 
+    # ── единый роутер ответа: инлайн-бот (use_inline) или utils.answer ──
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        """Промежуточное «загрузка…»: в инлайне пропускаем, чтобы не плодить сообщения."""
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
+
     # ───────────────────── команды ─────────────────────
     @loader.command(ru_doc="Показать системную инфу (карточка)", alias="ff")
     async def fetchcmd(self, message):
         """Show system info card"""
-        msg = await utils.answer(message, self.strings("loading"))
+        msg = await self._status(message, self.strings("loading"))
         try:
             tool, rows = await self._collect_tool()
             if not rows:
                 rows = self._builtin_rows()
-            await utils.answer(msg, self._render(tool, rows))
+            await self._reply(message, self._render(tool, rows))
         except Exception as exc:  # noqa: BLE001
             logger.exception("fetch failed: %s", exc)
-            await utils.answer(msg, self.strings("fail").format(escape(str(exc))))
+            await self._reply(message, self.strings("fail").format(escape(str(exc))))
 
     @loader.command(ru_doc="Системная инфа карточкой-картинкой", alias="ffi")
     async def fetchimgcmd(self, message):
         """System info as an image card"""
         if not _PIL:
-            return await utils.answer(
+            return await self._reply(
                 message, "🚫 <b>Pillow не установлен.</b> Используй <code>.fetch</code>."
             )
-        await utils.answer(message, self.strings("loading"))
+        await self._status(message, self.strings("loading"))
         try:
             tool, rows = await self._collect_tool()
             if not rows:
@@ -464,12 +483,12 @@ class DragoFetchMod(loader.Module):
             await utils.answer(message=message, response=caption, file=img)
         except Exception as exc:  # noqa: BLE001
             logger.exception("fetchimg failed: %s", exc)
-            await utils.answer(message, self.strings("fail").format(escape(str(exc))))
+            await self._reply(message, self.strings("fail").format(escape(str(exc))))
 
     @loader.command(ru_doc="Топ процессов по CPU и RAM", alias="tp")
     async def topproccmd(self, message):
         """Top processes by CPU and RAM"""
-        msg = await utils.answer(message, "📊 <b>Собираю процессы…</b>")
+        await self._status(message, "📊 <b>Собираю процессы…</b>")
         by_cpu, by_ram = await self._top_procs()
         lines = [
             f"{self.config['emoji_metrics']} <b>Топ процессов</b>\n",
@@ -480,7 +499,7 @@ class DragoFetchMod(loader.Module):
         lines.append(f"\n{self.config['emoji_ram']} <b>По RAM:</b>")
         for name, _, mem in by_ram:
             lines.append(f"• <code>{escape(name)}</code> — {mem:.1f}%")
-        await utils.answer(msg, "\n".join(lines))
+        await self._reply(message, "\n".join(lines))
 
     @loader.command(ru_doc="Сырой вывод fastfetch/neofetch", alias="ffr")
     async def fetchrawcmd(self, message):
@@ -497,10 +516,10 @@ class DragoFetchMod(loader.Module):
                     raw = await self._run("fastfetch", "--logo", "none", "--pipe")
                 else:
                     raw = await self._run("neofetch", "--stdout")
-                return await utils.answer(
+                return await self._reply(
                     message,
                     f"🖥 <b>{t}</b>\n<pre>{escape(raw.strip()[:3800])}</pre>",
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("%s raw failed: %s", t, exc)
-        await utils.answer(message, self.strings("no_tool"))
+        await self._reply(message, self.strings("no_tool"))
