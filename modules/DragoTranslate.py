@@ -1,21 +1,32 @@
-__version__ = (1, 1, 1)
+__version__ = (1, 2, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
-# changelog: команда .dtr (алиас .dtl); убран конфликт с core-командой .tr
+# changelog: инлайн-режим (use_inline) — ответы через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoTranslate — перевод текста/реплая (Google, без ключа).   ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import logging
+import re
 
 import aiohttp
 
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 API = "https://translate.googleapis.com/translate_a/single"
 
@@ -66,7 +77,30 @@ class DragoTranslateMod(loader.Module):
                 "Эмодзи заголовка. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять ответы через инлайн-бота (от бота, а не аккаунта).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     async def _translate(self, text: str, target: str) -> tuple[str, str]:
         params = {"client": "gtx", "sl": "auto", "tl": target, "dt": "t", "q": text}
@@ -101,19 +135,19 @@ class DragoTranslateMod(loader.Module):
                 text = args
 
         if not text.strip():
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_text").format(p=self.get_prefix())
             )
 
-        msg = await utils.answer(message, self.strings("loading"))
+        await self._status(message, self.strings("loading"))
         try:
             translated, src = await self._translate(text, target)
         except Exception as exc:  # noqa: BLE001
             logger.exception("translate failed: %s", exc)
-            return await utils.answer(msg, self.strings("fail").format(exc))
+            return await self._reply(message, self.strings("fail").format(exc))
 
-        await utils.answer(
-            msg,
+        await self._reply(
+            message,
             self.strings("result").format(
                 emoji=self.config["emoji_title"],
                 src=utils.escape_html(src),
