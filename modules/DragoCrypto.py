@@ -1,19 +1,19 @@
-__version__ = (1, 5, 1)
+__version__ = (1, 6, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: use_inline маршрутизирует ВСЕ ответы .price/.conv через инлайн-бота
+# changelog: команда .chart — биржевой график монеты (оси цены/дат, сетка, мин/макс)
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
-# ║  Опционально — красивая карточка-картинка с курсами.           ║
+# ║  DragoCrypto — курсы крипты, конвертация и биржевой график.    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import io
 import logging
 import re
+from datetime import datetime
 
 import aiohttp
 
@@ -104,12 +104,21 @@ class DragoCryptoMod(loader.Module):
             "    {cur1}  ·  {chg}"
         ),
         "conv_result": "{emoji} <b>{amount} {src}</b> = <b>{result} {dst}</b>",
+        "no_args_chart": (
+            "🚫 <b>Укажи монету.</b> Пример: <code>{p}chart btc</code> "
+            "или <code>{p}chart eth 30</code> (дней)."
+        ),
+        "chart_caption": (
+            "{emoji} <b>{name}</b> <code>{sym}</code> · {cur}\n"
+            "{arrow} <b>{chg}</b> за {days}д  ·  ↑ {hi}  ↓ {lo}"
+        ),
     }
 
     strings_ru = {
-        "_cls_doc": "💰 Курсы криптовалют и конвертация валют (без API-ключей).",
+        "_cls_doc": "💰 Курсы криптовалют, конвертация и биржевой график (без API-ключей).",
         "pricecmd_doc": "<монета…> — курс криптовалюты",
         "convcmd_doc": "<сумма> <из> <в> — конвертация валют/крипты",
+        "chartcmd_doc": "<монета> [дней] — биржевой график",
         "no_args_price": (
             "🚫 <b>Укажи монету.</b> Пример: <code>{p}price btc</code> "
             "или <code>{p}price eth sol ton</code>."
@@ -127,6 +136,14 @@ class DragoCryptoMod(loader.Module):
             "    {cur1}  ·  {chg}"
         ),
         "conv_result": "{emoji} <b>{amount} {src}</b> = <b>{result} {dst}</b>",
+        "no_args_chart": (
+            "🚫 <b>Укажи монету.</b> Пример: <code>{p}chart btc</code> "
+            "или <code>{p}chart eth 30</code> (дней)."
+        ),
+        "chart_caption": (
+            "{emoji} <b>{name}</b> <code>{sym}</code> · {cur}\n"
+            "{arrow} <b>{chg}</b> за {days}д  ·  ↑ {hi}  ↓ {lo}"
+        ),
     }
 
     def __init__(self):
@@ -172,6 +189,12 @@ class DragoCryptoMod(loader.Module):
                 False,
                 "Картинку-карточку слать через инлайн-бота (нужно as_image=True).",
                 validator=loader.validators.Boolean(),
+            ),
+            loader.ConfigValue(
+                "chart_days",
+                7,
+                "Период графика .chart по умолчанию (дней).",
+                validator=loader.validators.Integer(minimum=1, maximum=365),
             ),
         )
 
@@ -354,6 +377,99 @@ class DragoCryptoMod(loader.Module):
         buf.seek(0)
         return buf
 
+    def _render_chart(self, name, sym, cur_sign, points, days) -> io.BytesIO:
+        """Биржевой график: оси цены и дат, сетка, линия с заливкой, мин/макс.
+
+        points — список [ts_ms, price]. Возвращает PNG.
+        """
+        f_title = self._font("DejaVuSans-Bold.ttf", 30)
+        f_price = self._font("DejaVuSans-Bold.ttf", 26)
+        f_axis = self._font("DejaVuSans.ttf", 16)
+        f_small = self._font("DejaVuSans.ttf", 15)
+
+        W, H = 1000, 560
+        pad_l, pad_r, pad_t, pad_b = 30, 110, 110, 60  # отступы под оси/заголовок
+        gx0, gy0 = pad_l, pad_t
+        gx1, gy1 = W - pad_r, H - pad_b
+        gw, gh = gx1 - gx0, gy1 - gy0
+
+        prices = [p[1] for p in points]
+        times = [p[0] / 1000 for p in points]
+        lo, hi = min(prices), max(prices)
+        first, last = prices[0], prices[-1]
+        rng = (hi - lo) or (hi or 1)
+        up = last >= first
+        line_col = (118, 201, 124) if up else (240, 110, 120)
+        fill_col = (40, 70, 50) if up else (70, 42, 48)
+
+        img = Image.new("RGB", (W, H), (16, 18, 27))
+        d = ImageDraw.Draw(img)
+        top, bot = (22, 24, 36), (30, 26, 44)
+        for y in range(H):
+            t = y / H
+            d.line([(0, y), (W, y)],
+                   fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
+
+        accent = (240, 185, 66)
+        grid = (44, 48, 70)
+        muted = (140, 148, 178)
+        white = (228, 232, 248)
+
+        # заголовок
+        d.text((pad_l, 28), f"{name} ({sym})", font=f_title, fill=white)
+        cur_txt = f"{self._fmt(last)} {cur_sign}"
+        d.text((pad_l, 66), cur_txt, font=f_price, fill=accent)
+        chg_pct = (last - first) / first * 100 if first else 0
+        chg_txt = f"{'▲' if up else '▼'} {chg_pct:+.2f}%  ·  {days}д"
+        d.text((pad_l + d.textlength(cur_txt, font=f_price) + 24, 70),
+               chg_txt, font=f_axis, fill=line_col)
+
+        def py(price):  # цена → координата Y
+            return gy1 - (price - lo) / rng * gh
+
+        def px(i):  # индекс точки → координата X
+            return gx0 + gw * i / (len(prices) - 1)
+
+        # горизонтальная сетка + подписи цен справа (5 линий)
+        for k in range(5):
+            val = lo + rng * k / 4
+            yy = py(val)
+            d.line([(gx0, yy), (gx1, yy)], fill=grid, width=1)
+            d.text((gx1 + 8, yy - 8), self._fmt(val), font=f_small, fill=muted)
+
+        # вертикальная сетка + даты снизу (5 меток)
+        for k in range(5):
+            i = round((len(prices) - 1) * k / 4)
+            xx = px(i)
+            d.line([(xx, gy0), (xx, gy1)], fill=grid, width=1)
+            fmt = "%d.%m" if days > 2 else "%H:%M"
+            label = datetime.fromtimestamp(times[i]).strftime(fmt)
+            tw = d.textlength(label, font=f_small)
+            d.text((xx - tw / 2, gy1 + 10), label, font=f_small, fill=muted)
+
+        # заливка под линией + сама линия
+        coords = [(px(i), py(p)) for i, p in enumerate(prices)]
+        d.polygon(coords + [(gx1, gy1), (gx0, gy1)], fill=fill_col)
+        d.line(coords, fill=line_col, width=3, joint="curve")
+
+        # маркеры макс/мин
+        hi_i, lo_i = prices.index(hi), prices.index(lo)
+        for idx, val, col, dy in ((hi_i, hi, (118, 201, 124), -22), (lo_i, lo, (240, 110, 120), 8)):
+            x, y = px(idx), py(val)
+            d.ellipse([x - 4, y - 4, x + 4, y + 4], fill=col)
+            lab = self._fmt(val)
+            lw = d.textlength(lab, font=f_small)
+            d.text((min(max(x - lw / 2, gx0), gx1 - lw), y + dy), lab, font=f_small, fill=col)
+
+        # точка текущей цены
+        d.ellipse([gx1 - 5, py(last) - 5, gx1 + 5, py(last) + 5], fill=accent)
+
+        buf = io.BytesIO()
+        buf.name = "dragochart.png"
+        img.save(buf, "PNG")
+        buf.seek(0)
+        return buf
+
     def _render_conv_image(self, amount: float, src: str, result: float, dst: str) -> io.BytesIO:
         f_title = self._font("DejaVuSans-Bold.ttf", 30)
         f_big = self._font("DejaVuSans-Bold.ttf", 46)
@@ -515,6 +631,83 @@ class DragoCryptoMod(loader.Module):
                 dst=dst.upper(),
             ),
         )
+
+    # ── .chart ──────────────────────────────────────────────────
+    @loader.command(ru_doc="<монета> [дней] — биржевой график", alias="graph")
+    async def chartcmd(self, message):
+        """<coin> [days] — exchange-style price chart"""
+        if Image is None:
+            return await self._reply(
+                message, "🚫 <b>Pillow не установлен.</b>"
+            )
+        parts = utils.get_args_raw(message).split()
+        if not parts:
+            return await self._reply(
+                message, self.strings("no_args_chart").format(p=self.get_prefix())
+            )
+        ticker = parts[0]
+        days = int(self.config["chart_days"])
+        if len(parts) > 1 and parts[1].isdigit():
+            days = max(1, min(365, int(parts[1])))
+
+        emoji = self.config["emoji_crypto"]
+        await self._status(message, self.strings("loading").format(emoji=emoji))
+
+        cid = await self._resolve_id(ticker)
+        if not cid:
+            return await self._reply(
+                message, self.strings("not_found").format(utils.escape_html(ticker))
+            )
+        vs = self.config["vs_currency"].lower()
+        try:
+            data = await self._get_json(
+                f"{CG}/coins/{cid}/market_chart",
+                {"vs_currency": vs, "days": days},
+            )
+            meta = await self._get_json(
+                f"{CG}/coins/markets",
+                {"vs_currency": vs, "ids": cid},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("chart failed: %s", exc)
+            return await self._reply(
+                message, self.strings("fail").format(utils.escape_html(str(exc)))
+            )
+
+        points = data.get("prices") or []
+        if len(points) < 2:
+            return await self._reply(
+                message, self.strings("not_found").format(utils.escape_html(ticker))
+            )
+
+        m = meta[0] if meta else {}
+        name = m.get("name", ticker.upper())
+        sym = (m.get("symbol", ticker) or "").upper()
+        cur_sign = vs.upper()
+        prices = [p[1] for p in points]
+        first, last = prices[0], prices[-1]
+        chg = (last - first) / first * 100 if first else 0
+
+        try:
+            img = self._render_chart(name, sym, cur_sign, points, days)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("chart render failed: %s", exc)
+            return await self._reply(
+                message, self.strings("fail").format(utils.escape_html(str(exc)))
+            )
+
+        caption = self.strings("chart_caption").format(
+            emoji=emoji,
+            name=utils.escape_html(name),
+            sym=utils.escape_html(sym),
+            cur=f"{self._fmt(last)} {cur_sign}",
+            arrow=self.config["emoji_up"] if chg >= 0 else self.config["emoji_down"],
+            chg=f"{chg:+.2f}%",
+            days=days,
+            hi=f"{self._fmt(max(prices))} {cur_sign}",
+            lo=f"{self._fmt(min(prices))} {cur_sign}",
+        )
+        await self._send_card(message, img, caption)
 
     async def _convert(self, amount: float, src: str, dst: str) -> float | None:
         src_fiat = src in _FIAT_CODES
