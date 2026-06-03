@@ -1,10 +1,10 @@
-__version__ = (1, 6, 0)
+__version__ = (1, 6, 1)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: команда .chart — биржевой график монеты (оси цены/дат, сетка, мин/макс)
+# changelog: спарклайн в .price аккуратнее — сглаживание, точки мин/макс/текущей, базовая линия
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты, конвертация и биржевой график.    ║
@@ -288,24 +288,52 @@ class DragoCryptoMod(loader.Module):
             return ImageFont.load_default()
 
     @staticmethod
-    def _sparkline(d, prices, x, y, w, h, color):
-        """Рисует мини-график цены (7д) с лёгкой заливкой под линией."""
+    def _smooth(values, window=5):
+        """Скользящее среднее для сглаживания спарклайна."""
+        n = len(values)
+        if n < 3 or window < 2:
+            return values
+        half = window // 2
+        out = []
+        for i in range(n):
+            a, b = max(0, i - half), min(n, i + half + 1)
+            out.append(sum(values[a:b]) / (b - a))
+        return out
+
+    def _sparkline(self, d, prices, x, y, w, h, color):
+        """Аккуратный мини-график: сглаживание, заливка, точки мин/макс и текущей."""
         pts = [p for p in (prices or []) if isinstance(p, (int, float))]
         if len(pts) < 2 or w < 10:
             return
-        lo, hi = min(pts), max(pts)
+        sm = self._smooth(pts)
+        lo, hi = min(sm), max(sm)
         rng = (hi - lo) or 1
-        n = len(pts)
-        coords = [
-            (x + w * i / (n - 1), y + h - (p - lo) / rng * h)
-            for i, p in enumerate(pts)
-        ]
-        # полупрозрачная заливка под линией
-        fill = tuple(int(c * 0.35 + 30 * 0.65) for c in color)
-        d.polygon(
-            coords + [(coords[-1][0], y + h), (coords[0][0], y + h)], fill=fill
-        )
+        n = len(sm)
+
+        def cx(i):
+            return x + w * i / (n - 1)
+
+        def cy(v):
+            return y + h - (v - lo) / rng * h
+
+        coords = [(cx(i), cy(v)) for i, v in enumerate(sm)]
+        # мягкая заливка под линией
+        base = (16, 18, 27)
+        fill = tuple(int(color[i] * 0.28 + base[i] * 0.72) for i in range(3))
+        d.polygon(coords + [(coords[-1][0], y + h), (coords[0][0], y + h)], fill=fill)
+        # пунктирная нулевая линия (старт периода) — видно рост/падение
+        y_start = cy(sm[0])
+        for sx in range(int(x), int(x + w), 8):
+            d.line([(sx, y_start), (sx + 4, y_start)], fill=(70, 74, 96), width=1)
         d.line(coords, fill=color, width=2, joint="curve")
+        # точки макс/мин и текущей цены
+        hi_i, lo_i = sm.index(hi), sm.index(lo)
+        d.ellipse([cx(hi_i) - 3, cy(hi) - 3, cx(hi_i) + 3, cy(hi) + 3],
+                  fill=(118, 201, 124))
+        d.ellipse([cx(lo_i) - 3, cy(lo) - 3, cx(lo_i) + 3, cy(lo) + 3],
+                  fill=(240, 110, 120))
+        d.ellipse([cx(n - 1) - 3, cy(sm[-1]) - 3, cx(n - 1) + 3, cy(sm[-1]) + 3],
+                  fill=(240, 185, 66))
 
     def _render_image(self, coins: list, cur_sign: str) -> io.BytesIO:
         f_title = self._font("DejaVuSans-Bold.ttf", 34)
