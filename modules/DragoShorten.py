@@ -1,9 +1,9 @@
-__version__ = (1, 1, 1)
+__version__ = (1, 2, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
-# changelog: .shortimg берёт медиа из реплая ИЛИ из подписи к самому сообщению
+# changelog: инлайн-режим (use_inline) — ответы через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoShorten — короткие ссылки + заливка фото (без ключа).    ║
@@ -11,6 +11,7 @@ __version__ = (1, 1, 1)
 
 import io
 import logging
+import re
 from urllib.parse import quote
 
 import aiohttp
@@ -18,6 +19,16 @@ import aiohttp
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 _SERVICES = {
     "isgd": "https://is.gd/create.php?format=simple&url={url}",
@@ -103,7 +114,30 @@ class DragoShortenMod(loader.Module):
                 "Дополнительно сокращать ссылку на загруженный файл.",
                 validator=loader.validators.Boolean(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять ответы через инлайн-бота (от бота, а не аккаунта).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     def _target(self, message):
         """Берёт URL из аргумента или из реплая."""
@@ -169,12 +203,12 @@ class DragoShortenMod(loader.Module):
                         url = tok
                         break
         if not url or not url.startswith("http"):
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_url").format(p=self.get_prefix())
             )
 
         emoji = self.config["emoji_link"]
-        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+        await self._status(message, self.strings("loading").format(emoji=emoji))
 
         # сначала выбранный сервис, затем остальные как фолбэк
         order = [self.config["service"]] + [s for s in _SERVICES if s != self.config["service"]]
@@ -186,8 +220,8 @@ class DragoShortenMod(loader.Module):
                 logger.debug("shorten via %s failed: %s", svc, exc)
                 errors.append(f"{svc}: {exc}")
                 continue
-            return await utils.answer(
-                msg,
+            return await self._reply(
+                message,
                 self.strings("result").format(
                     emoji=emoji,
                     svc=svc,
@@ -197,8 +231,8 @@ class DragoShortenMod(loader.Module):
             )
 
         logger.warning("shorten all failed: %s", errors)
-        await utils.answer(
-            msg,
+        await self._reply(
+            message,
             self.strings("all_failed").format(detail=utils.escape_html("; ".join(errors)[:300])),
         )
 
@@ -207,11 +241,11 @@ class DragoShortenMod(loader.Module):
         """<url> — expand a short link"""
         url = self._target(message)
         if not url or not url.startswith("http"):
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_url").format(p=self.get_prefix())
             )
         emoji = self.config["emoji_link"]
-        msg = await utils.answer(message, self.strings("expanding").format(emoji=emoji))
+        await self._status(message, self.strings("expanding").format(emoji=emoji))
         try:
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -219,9 +253,9 @@ class DragoShortenMod(loader.Module):
                     full = str(resp.url)
         except Exception as exc:  # noqa: BLE001
             logger.exception("expand failed: %s", exc)
-            return await utils.answer(msg, self.strings("fail").format(utils.escape_html(str(exc))))
-        await utils.answer(
-            msg, self.strings("expanded").format(emoji=emoji, full=utils.escape_html(full))
+            return await self._reply(message, self.strings("fail").format(utils.escape_html(str(exc))))
+        await self._reply(
+            message, self.strings("expanded").format(emoji=emoji, full=utils.escape_html(full))
         )
 
     @loader.command(ru_doc="ответом на фото/файл — получить прямую ссылку", alias="simg")
@@ -231,18 +265,18 @@ class DragoShortenMod(loader.Module):
         reply = await message.get_reply_message()
         source = message if message.media else (reply if reply and reply.media else None)
         if source is None:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_media").format(p=self.get_prefix())
             )
 
         emoji = self.config["emoji_link"]
-        msg = await utils.answer(message, self.strings("uploading").format(emoji=emoji))
+        await self._status(message, self.strings("uploading").format(emoji=emoji))
         try:
             data = await source.download_media(bytes)
         except Exception as exc:  # noqa: BLE001
             logger.exception("download failed: %s", exc)
-            return await utils.answer(
-                msg, self.strings("img_failed").format(detail=utils.escape_html(str(exc)))
+            return await self._reply(
+                message, self.strings("img_failed").format(detail=utils.escape_html(str(exc)))
             )
 
         ext = ""
@@ -265,8 +299,8 @@ class DragoShortenMod(loader.Module):
                 errors.append(f"{host}: {exc}")
         if not link:
             logger.warning("image upload all failed: %s", errors)
-            return await utils.answer(
-                msg,
+            return await self._reply(
+                message,
                 self.strings("img_failed").format(
                     detail=utils.escape_html("; ".join(errors)[:300])
                 ),
@@ -275,8 +309,8 @@ class DragoShortenMod(loader.Module):
         if self.config["shorten_image_link"]:
             svc, short = await self._shorten_any(link)
             if short:
-                return await utils.answer(
-                    msg,
+                return await self._reply(
+                    message,
                     self.strings("img_result_short").format(
                         emoji=emoji,
                         host=f"{used_host} → {svc}",
@@ -285,8 +319,8 @@ class DragoShortenMod(loader.Module):
                     ),
                 )
 
-        await utils.answer(
-            msg,
+        await self._reply(
+            message,
             self.strings("img_result").format(
                 emoji=emoji, host=used_host, link=utils.escape_html(link)
             ),
