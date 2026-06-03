@@ -1,9 +1,9 @@
-__version__ = (1, 5, 4)
+__version__ = (1, 5, 5)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: маркер «выкл» ▫️ вместо громоздкого ⬜️ в меню автообновления
+# changelog: выбранные модули — красная премиум-галочка (emoji_id), невыбранные — без маркера
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -455,12 +455,10 @@ class DragoModUpdatesMod(loader.Module):
         enabled = set(self._enabled())
         rows, row = [], []
         for n in installed:
-            mark = "✅" if n in enabled else "▫️"
-            row.append({
-                "text": f"{mark} {n}",
-                "callback": self._au_toggle,
-                "args": (n,),
-            })
+            btn = {"text": n, "callback": self._au_toggle, "args": (n,)}
+            if n in enabled:  # выбранные — красная премиум-галочка иконкой кнопки
+                btn["emoji_id"] = "5258387825530807373"
+            row.append(btn)
             if len(row) == 2:
                 rows.append(row)
                 row = []
