@@ -1,10 +1,10 @@
-__version__ = (1, 3, 0)
+__version__ = (1, 4, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: .conv тоже умеет картинку-карточку (as_image)
+# changelog: 7-дневный график в карточке .price; миграция старого конфига (rub + премиум-эмодзи)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
@@ -134,6 +134,23 @@ class DragoCryptoMod(loader.Module):
             ),
         )
 
+    async def client_ready(self, client, db):
+        self._client = client
+        self._db = db
+        # одноразовая миграция старых сохранённых дефолтов на новые
+        if not self.get("_migrated_v14", False):
+            if (self.config["vs_currency"] or "").lower() == "usd":
+                self.config["vs_currency"] = "rub"
+            migrate = {
+                "emoji_crypto": ("💰", "<emoji document_id=5258076470466617642>💳</emoji>"),
+                "emoji_up": ("📈", "<emoji document_id=5260464635491949616>🚀</emoji>"),
+                "emoji_down": ("📉", "<emoji document_id=5260319946633681748>🛑</emoji>"),
+            }
+            for key, (old, new) in migrate.items():
+                if self.config[key] == old:
+                    self.config[key] = new
+            self.set("_migrated_v14", True)
+
     # ── HTTP ────────────────────────────────────────────────────
     async def _get_json(self, url: str, params: dict | None = None):
         timeout = aiohttp.ClientTimeout(total=25)
@@ -173,6 +190,26 @@ class DragoCryptoMod(loader.Module):
             return ImageFont.truetype(_FONT_DIR + name, size)
         except Exception:  # noqa: BLE001
             return ImageFont.load_default()
+
+    @staticmethod
+    def _sparkline(d, prices, x, y, w, h, color):
+        """Рисует мини-график цены (7д) с лёгкой заливкой под линией."""
+        pts = [p for p in (prices or []) if isinstance(p, (int, float))]
+        if len(pts) < 2 or w < 10:
+            return
+        lo, hi = min(pts), max(pts)
+        rng = (hi - lo) or 1
+        n = len(pts)
+        coords = [
+            (x + w * i / (n - 1), y + h - (p - lo) / rng * h)
+            for i, p in enumerate(pts)
+        ]
+        # полупрозрачная заливка под линией
+        fill = tuple(int(c * 0.35 + 30 * 0.65) for c in color)
+        d.polygon(
+            coords + [(coords[-1][0], y + h), (coords[0][0], y + h)], fill=fill
+        )
+        d.line(coords, fill=color, width=2, joint="curve")
 
     def _render_image(self, coins: list, cur_sign: str) -> io.BytesIO:
         f_title = self._font("DejaVuSans-Bold.ttf", 34)
@@ -227,6 +264,13 @@ class DragoCryptoMod(loader.Module):
                 col = up_col if chg >= 0 else down_col
             cw = d.textlength(chg_txt, font=f_chg)
             d.text((W - pad - cw, y + 42), chg_txt, font=f_chg, fill=col)
+
+            # 7-дневный мини-график между названием и ценой
+            spark = ((c.get("sparkline_in_7d") or {}).get("price")) or []
+            self._sparkline(
+                d, spark, x=pad + 230, y=y + 12, w=W - pad - pad - 230 - 200, h=44,
+                color=up_col if (chg or 0) >= 0 else down_col,
+            )
 
             y += row_h
             d.line([(pad, y - 14), (W - pad, y - 14)], fill=(44, 48, 68), width=1)
@@ -300,7 +344,12 @@ class DragoCryptoMod(loader.Module):
         try:
             data = await self._get_json(
                 f"{CG}/coins/markets",
-                {"vs_currency": vs, "ids": ",".join(ids), "price_change_percentage": "24h"},
+                {
+                    "vs_currency": vs,
+                    "ids": ",".join(ids),
+                    "price_change_percentage": "24h",
+                    "sparkline": "true",  # 7-дневный график для карточки
+                },
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("price failed: %s", exc)
