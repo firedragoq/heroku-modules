@@ -1,10 +1,10 @@
-__version__ = (1, 2, 0)
+__version__ = (1, 3, 0)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
 # requires: aiohttp
-# changelog: дефолт 50 строк (читабельно) + конфиг max_lines
+# changelog: инлайн-режим (use_inline) — картинка кода одним сообщением от бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCarbon — красивые картинки кода (carbon-style, без ключа).║
@@ -12,6 +12,7 @@ __version__ = (1, 2, 0)
 
 import io
 import logging
+import re
 
 import aiohttp
 
@@ -20,6 +21,40 @@ from .. import loader, utils
 logger = logging.getLogger(__name__)
 
 API = "https://carbonara.solopov.dev/api/cook"
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
+
+
+async def _upload_image(data: bytes) -> str | None:
+    """Заливает картинку на catbox→0x0, возвращает URL (для инлайн-формы)."""
+    headers = {"User-Agent": "Mozilla/5.0 (DragoCarbon)"}
+    timeout = aiohttp.ClientTimeout(total=30)
+    hosts = [
+        ("https://catbox.moe/user/api.php", "fileToUpload", {"reqtype": "fileupload"}),
+        ("https://0x0.st", "file", {}),
+    ]
+    for url, field, extra in hosts:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
+                form = aiohttp.FormData()
+                for k, v in extra.items():
+                    form.add_field(k, v)
+                form.add_field(field, data, filename="carbon.png")
+                async with s.post(url, data=form) as r:
+                    body = (await r.text()).strip()
+                    if body.startswith("http"):
+                        return body
+        except Exception as e:  # noqa: BLE001
+            logger.warning("carbon upload via %s failed: %s", url, e)
+    return None
 
 # популярные темы carbon (для подсказки)
 _THEMES = (
@@ -97,7 +132,30 @@ class DragoCarbonMod(loader.Module):
                 "Эмодзи модуля. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять картинку через инлайн-бота (одним сообщением от бота).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     async def _cook(self, code: str) -> bytes:
         payload = {
@@ -142,7 +200,7 @@ class DragoCarbonMod(loader.Module):
             code = await self._code_from_reply(await message.get_reply_message())
         emoji = self.config["emoji_carbon"]
         if not code or not code.strip():
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_code").format(emoji=emoji, p=self.get_prefix())
             )
 
@@ -154,21 +212,29 @@ class DragoCarbonMod(loader.Module):
             code = "\n".join(lines[:max_lines])
             trunc = self.strings("trunc").format(n=max_lines)
 
-        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+        await self._status(message, self.strings("loading").format(emoji=emoji))
         try:
             data = await self._cook(code)
         except Exception as exc:  # noqa: BLE001
             logger.exception("carbon failed: %s", exc)
-            return await utils.answer(
-                msg, self.strings("fail").format(utils.escape_html(str(exc)))
+            return await self._reply(
+                message, self.strings("fail").format(utils.escape_html(str(exc)))
             )
+
+        caption = self.strings("caption").format(
+            emoji=emoji, theme=utils.escape_html(self.config["theme"]), trunc=trunc
+        )
+        # инлайн-режим: картинка одним сообщением от бота
+        if self._inline_on:
+            url = await _upload_image(data)
+            if url:
+                try:
+                    return await self.inline.form(
+                        message=message, text=_to_bot_emoji(caption), photo=url
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("inline carbon failed, fallback: %s", exc)
 
         img = io.BytesIO(data)
         img.name = "carbon.png"
-        await utils.answer(
-            message,
-            self.strings("caption").format(
-                emoji=emoji, theme=utils.escape_html(self.config["theme"]), trunc=trunc
-            ),
-            file=img,
-        )
+        await utils.answer(message, caption, file=img)
