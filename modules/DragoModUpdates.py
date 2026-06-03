@@ -1,9 +1,9 @@
-__version__ = (1, 6, 1)
+__version__ = (1, 6, 2)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: служебные сообщения обмена списком удаляются из ЛС
+# changelog: премиум-эмодзи в сообщениях установки/подключения/обновления
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -70,15 +70,15 @@ class DragoModUpdatesMod(loader.Module):
     strings = {
         "name": "DragoModUpdates",
         "no_bot": "🚫 <b>Укажи юзернейм бота в конфиге</b> (<code>{}cfg DragoModUpdates</code>).",
-        "connecting": "🔗 <b>Подключаюсь к боту…</b>",
+        "connecting": "<emoji document_id=5258407500775989445>🔗</emoji> <b>Подключаюсь к боту…</b>",
         "connected": (
-            "✅ <b>Готово!</b> Аккаунт подключён к боту "
+            "<emoji document_id=5258387825530807373>✅</emoji> <b>Готово!</b> Аккаунт подключён к боту "
             "<code>@{}</code>.\n\nТеперь жми «Установить в Heroku» под "
             "модулями в канале."
         ),
         "disconnected": "👋 <b>Отключено.</b> Открой бота и нажми /start ещё раз для повторного подключения.",
-        "installing": "📥 <b>Устанавливаю модуль…</b>\n<code>{}</code>",
-        "install_ok": "✅ <b>Модуль установлен:</b> <code>{}</code>",
+        "installing": "<emoji document_id=5258497901247631978>📥</emoji> <b>Устанавливаю модуль…</b>\n<code>{}</code>",
+        "install_ok": "<emoji document_id=5258387825530807373>✅</emoji> <b>Модуль установлен:</b> <code>{}</code>",
         "install_fail": "🚫 <b>Не удалось установить модуль.</b>\n<code>{}</code>",
         "status": (
             "📦 <b>DragoModUpdates</b> <code>v{ver}</code>\n\n"
@@ -87,13 +87,13 @@ class DragoModUpdatesMod(loader.Module):
             "📥 Установлено через бота: <b>{count}</b>\n"
             "🔄 Автообновление: <b>{auto}</b>"
         ),
-        "checking_self": "🔄 <b>Проверяю обновления DragoModUpdates…</b>",
-        "self_uptodate": "✅ <b>DragoModUpdates</b> уже последней версии (<code>v{}</code>).",
+        "checking_self": "<emoji document_id=5260375398956442465>🔄</emoji> <b>Проверяю обновления DragoModUpdates…</b>",
+        "self_uptodate": "<emoji document_id=5258387825530807373>✅</emoji> <b>DragoModUpdates</b> уже последней версии (<code>v{}</code>).",
         "self_updating": (
             "🆕 <b>Найдена новая версия DragoModUpdates:</b> "
             "<code>v{old}</code> → <code>v{new}</code>\n♻️ Обновляюсь…"
         ),
-        "self_updated": "✅ <b>DragoModUpdates обновлён до</b> <code>v{}</code>!",
+        "self_updated": "<emoji document_id=5258387825530807373>✅</emoji> <b>DragoModUpdates обновлён до</b> <code>v{}</code>!",
         "self_fail": "🚫 <b>Не удалось обновить DragoModUpdates.</b>\n<code>{}</code>",
         "au_status": (
             "♻️ <b>Автообновление модулей DragoModules</b>\n\n"
@@ -107,27 +107,27 @@ class DragoModUpdatesMod(loader.Module):
         ),
         "au_none_disabled": "Отключённых модулей нет.",
         "au_disabled_list": "Отключены: {list}",
-        "au_on": "✅ <b>Автообновление модулей включено.</b>",
+        "au_on": "<emoji document_id=5258387825530807373>✅</emoji> <b>Автообновление модулей включено.</b>",
         "au_off": "⛔ <b>Автообновление модулей выключено.</b>",
-        "au_mod_on": "✅ <b>{name}</b> — автообновление <b>включено</b>.",
+        "au_mod_on": "<emoji document_id=5258387825530807373>✅</emoji> <b>{name}</b> — автообновление <b>включено</b>.",
         "au_mod_off": "⛔ <b>{name}</b> — автообновление <b>выключено</b>.",
         "au_not_found": "🚫 <b>Модуль</b> <code>{}</code> <b>не найден среди установленных.</b>",
         "all_checking": "♻️ <b>Проверяю обновления модулей…</b>",
-        "all_done": "✅ <b>Обновлено модулей: {n}</b>\n{list}",
-        "all_uptodate": "✅ <b>Все модули DragoModules актуальны.</b>",
+        "all_done": "<emoji document_id=5258387825530807373>✅</emoji> <b>Обновлено модулей: {n}</b>\n{list}",
+        "all_uptodate": "<emoji document_id=5258387825530807373>✅</emoji> <b>Все модули DragoModules актуальны.</b>",
     }
 
     strings_ru = {
         "no_bot": "🚫 <b>Укажи юзернейм бота в конфиге</b> (<code>{}cfg DragoModUpdates</code>).",
-        "connecting": "🔗 <b>Подключаюсь к боту…</b>",
+        "connecting": "<emoji document_id=5258407500775989445>🔗</emoji> <b>Подключаюсь к боту…</b>",
         "connected": (
-            "✅ <b>Готово!</b> Аккаунт подключён к боту "
+            "<emoji document_id=5258387825530807373>✅</emoji> <b>Готово!</b> Аккаунт подключён к боту "
             "<code>@{}</code>.\n\nТеперь жми «Установить в Heroku» под "
             "модулями в канале."
         ),
         "disconnected": "👋 <b>Отключено.</b> Открой бота и нажми /start ещё раз для повторного подключения.",
-        "installing": "📥 <b>Устанавливаю модуль…</b>\n<code>{}</code>",
-        "install_ok": "✅ <b>Модуль установлен:</b> <code>{}</code>",
+        "installing": "<emoji document_id=5258497901247631978>📥</emoji> <b>Устанавливаю модуль…</b>\n<code>{}</code>",
+        "install_ok": "<emoji document_id=5258387825530807373>✅</emoji> <b>Модуль установлен:</b> <code>{}</code>",
         "install_fail": "🚫 <b>Не удалось установить модуль.</b>\n<code>{}</code>",
         "status": (
             "📦 <b>DragoModUpdates</b> <code>v{ver}</code>\n\n"
@@ -136,13 +136,13 @@ class DragoModUpdatesMod(loader.Module):
             "📥 Установлено через бота: <b>{count}</b>\n"
             "🔄 Автообновление: <b>{auto}</b>"
         ),
-        "checking_self": "🔄 <b>Проверяю обновления DragoModUpdates…</b>",
-        "self_uptodate": "✅ <b>DragoModUpdates</b> уже последней версии (<code>v{}</code>).",
+        "checking_self": "<emoji document_id=5260375398956442465>🔄</emoji> <b>Проверяю обновления DragoModUpdates…</b>",
+        "self_uptodate": "<emoji document_id=5258387825530807373>✅</emoji> <b>DragoModUpdates</b> уже последней версии (<code>v{}</code>).",
         "self_updating": (
             "🆕 <b>Найдена новая версия DragoModUpdates:</b> "
             "<code>v{old}</code> → <code>v{new}</code>\n♻️ Обновляюсь…"
         ),
-        "self_updated": "✅ <b>DragoModUpdates обновлён до</b> <code>v{}</code>!",
+        "self_updated": "<emoji document_id=5258387825530807373>✅</emoji> <b>DragoModUpdates обновлён до</b> <code>v{}</code>!",
         "self_fail": "🚫 <b>Не удалось обновить DragoModUpdates.</b>\n<code>{}</code>",
         "_cls_doc": "🆕 Установка модулей из канала-витрины в один тап.",
     }
