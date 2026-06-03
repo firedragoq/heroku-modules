@@ -1,9 +1,9 @@
-__version__ = (1, 4, 0)
+__version__ = (1, 4, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: автообновление ВСЕХ установленных модулей DragoModules + команда .autoupd
+# changelog: фикс «v?» — запоминаем установленную версию, не переустанавливаем актуальные
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -11,6 +11,7 @@ __version__ = (1, 4, 0)
 # ║  сам себя из репозитория.                                      ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+import inspect
 import json
 import logging
 import re
@@ -333,14 +334,29 @@ class DragoModUpdatesMod(loader.Module):
     @staticmethod
     def _mod_version(mod):
         """Версия загруженного модуля как кортеж чисел (или None)."""
-        v = getattr(mod, "__version__", None)
-        if v is None:
-            g = sys.modules.get(getattr(type(mod), "__module__", ""), None)
-            v = getattr(g, "__version__", None)
+        v = getattr(mod, "__version__", None) or getattr(mod, "version", None)
+        if v is None:  # из модуля, где определён класс
+            try:
+                m = inspect.getmodule(type(mod))
+            except Exception:  # noqa: BLE001
+                m = sys.modules.get(getattr(type(mod), "__module__", ""), None)
+            v = getattr(m, "__version__", None) if m else None
         try:
-            return tuple(int(x) for x in v) if v else None
+            if isinstance(v, (tuple, list)):
+                return tuple(int(x) for x in v)
+            if isinstance(v, str):
+                return tuple(int(x) for x in v.split(".") if x.isdigit())
         except Exception:  # noqa: BLE001
             return None
+        return None
+
+    def _installed_db(self) -> dict:
+        return self._db.get(self.strings["name"], "installed_versions", {})
+
+    def _record_version(self, name: str, ver):
+        d = self._installed_db()
+        d[name] = list(ver)
+        self._db.set(self.strings["name"], "installed_versions", d)
 
     async def _repo_modules(self) -> list:
         """Список имён модулей в репозитории (без .py)."""
@@ -372,6 +388,9 @@ class DragoModUpdatesMod(loader.Module):
             if mod is None:
                 continue  # не установлен
             local = self._mod_version(mod)
+            if local is None:  # не прочиталась — берём из нашей записи
+                rec = self._installed_db().get(name)
+                local = tuple(rec) if rec else None
             url = f"{_RAW_BASE}/{name}.py?t={int(time.time())}"
             try:
                 src = await self._fetch(url)
@@ -379,11 +398,14 @@ class DragoModUpdatesMod(loader.Module):
                 logger.warning("fetch %s failed: %s", name, exc)
                 continue
             remote = _parse_version(src)
-            if not remote or (local and remote <= local):
+            if not remote:
                 continue
-            # есть новее — ставим
+            if local and remote <= local:
+                continue
+            # есть новее (или локальная неизвестна — одноразовая синхронизация)
             try:
                 await self._do_install(url)
+                self._record_version(name, remote)  # чтобы не переустанавливать впредь
                 updated.append(
                     (name, ".".join(map(str, local or ())) or "?",
                      ".".join(map(str, remote)))
