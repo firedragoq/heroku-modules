@@ -1,10 +1,10 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 2, 0)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
 # requires: aiohttp
-# changelog: carbon из прикреплённого файла (реплай на .py/.txt…), обрезка длинного кода
+# changelog: дефолт 50 строк (читабельно) + конфиг max_lines
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCarbon — красивые картинки кода (carbon-style, без ключа).║
@@ -20,9 +20,6 @@ from .. import loader, utils
 logger = logging.getLogger(__name__)
 
 API = "https://carbonara.solopov.dev/api/cook"
-
-MAX_CHARS = 8000   # ограничение, чтобы картинка не была гигантской
-MAX_LINES = 160
 
 # популярные темы carbon (для подсказки)
 _THEMES = (
@@ -88,6 +85,13 @@ class DragoCarbonMod(loader.Module):
                 validator=loader.validators.Boolean(),
             ),
             loader.ConfigValue(
+                "max_lines",
+                50,
+                "Макс. строк кода на картинке (длинный код обрезается — carbon "
+                "для коротких сниппетов, иначе картинка нечитабельна).",
+                validator=loader.validators.Integer(minimum=5, maximum=300),
+            ),
+            loader.ConfigValue(
                 "emoji_carbon",
                 "<emoji document_id=5258502965014076491>🕹</emoji>",
                 "Эмодзи модуля. Можно премиум (шлётся от аккаунта).",
@@ -142,15 +146,13 @@ class DragoCarbonMod(loader.Module):
                 message, self.strings("no_code").format(emoji=emoji, p=self.get_prefix())
             )
 
-        # обрезаем слишком длинный код, чтобы картинка не была огромной
+        # обрезаем слишком длинный код, чтобы картинка осталась читабельной
         trunc = ""
+        max_lines = int(self.config["max_lines"])
         lines = code.splitlines()
-        if len(lines) > MAX_LINES:
-            code = "\n".join(lines[:MAX_LINES])
-            trunc = self.strings("trunc").format(n=MAX_LINES)
-        if len(code) > MAX_CHARS:
-            code = code[:MAX_CHARS]
-            trunc = trunc or self.strings("trunc").format(n=MAX_LINES)
+        if len(lines) > max_lines:
+            code = "\n".join(lines[:max_lines])
+            trunc = self.strings("trunc").format(n=max_lines)
 
         msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
         try:
