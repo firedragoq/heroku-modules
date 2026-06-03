@@ -1,9 +1,9 @@
-__version__ = (1, 5, 3)
+__version__ = (1, 5, 4)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: надёжные ✅/⬜️ в тексте кнопок (инлайн-бот Heroku не имеет прав на премиум-иконки кнопок)
+# changelog: маркер «выкл» ▫️ вместо громоздкого ⬜️ в меню автообновления
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -455,7 +455,7 @@ class DragoModUpdatesMod(loader.Module):
         enabled = set(self._enabled())
         rows, row = [], []
         for n in installed:
-            mark = "✅" if n in enabled else "⬜️"
+            mark = "✅" if n in enabled else "▫️"
             row.append({
                 "text": f"{mark} {n}",
                 "callback": self._au_toggle,
