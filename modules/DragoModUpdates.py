@@ -1,9 +1,9 @@
-__version__ = (1, 5, 6)
+__version__ = (1, 5, 7)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: убран emoji_id с кнопок (рендерился белым квадратом); выбранные — ✅ в тексте, невыбранные — просто название
+# changelog: кэш списка модулей репо (фикс 403 rate limit GitHub при нажатии кнопок меню)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -189,6 +189,7 @@ class DragoModUpdatesMod(loader.Module):
     async def client_ready(self, client, db):
         self._client = client
         self._db = db
+        self._repo_cache = None  # (timestamp, [names]) — кэш списка модулей репо
         await self._resolve_bot()
 
     def _bot_uname(self) -> str:
@@ -359,16 +360,23 @@ class DragoModUpdatesMod(loader.Module):
         d[name] = list(ver)
         self._db.set(self.strings["name"], "installed_versions", d)
 
-    async def _repo_modules(self) -> list:
-        """Список имён модулей в репозитории (без .py)."""
+    async def _repo_modules(self, force: bool = False) -> list:
+        """Список имён модулей в репозитории (без .py). Кэшируется на 5 минут,
+        чтобы повторные нажатия кнопок не упирались в лимит GitHub API."""
+        now = time.time()
+        cached = getattr(self, "_repo_cache", None)
+        if not force and cached and now - cached[0] < 300:
+            return cached[1]
         data = json.loads(await self._fetch(_REPO_API))
-        return [
+        names = [
             item["name"][:-3]
             for item in data
             if isinstance(item, dict)
             and item.get("type") == "file"
             and item.get("name", "").endswith(".py")
         ]
+        self._repo_cache = (now, names)
+        return names
 
     async def _installed_drago(self) -> list:
         """Установленные модули, которые есть в репозитории (имена, отсортированы)."""
