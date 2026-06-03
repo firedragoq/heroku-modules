@@ -1,9 +1,9 @@
-__version__ = (1, 2, 2)
+__version__ = (1, 3, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
-# requires: psutil pillow
-# changelog: фикс отправки картинки .fetchimg (response=/file= как в DragoYAMusic)
+# requires: psutil pillow aiohttp
+# changelog: инлайн-режим (use_inline) для .fetchimg — карточка одним сообщением от бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoFetch — красивая системная инфа (fastfetch/neofetch)     ║
@@ -19,9 +19,44 @@ import shutil
 import time
 from html import escape
 
+import aiohttp
 import psutil
 
 from .. import loader, utils
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (инлайн)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
+
+
+async def _upload_image(data: bytes) -> str | None:
+    """Заливает картинку на catbox→0x0, возвращает URL (для инлайн-формы)."""
+    headers = {"User-Agent": "Mozilla/5.0 (DragoFetch)"}
+    timeout = aiohttp.ClientTimeout(total=30)
+    hosts = [
+        ("https://catbox.moe/user/api.php", "fileToUpload", {"reqtype": "fileupload"}),
+        ("https://0x0.st", "file", {}),
+    ]
+    for url, field, extra in hosts:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
+                form = aiohttp.FormData()
+                for k, v in extra.items():
+                    form.add_field(k, v)
+                form.add_field(field, data, filename="fetch.png")
+                async with s.post(url, data=form) as r:
+                    body = (await r.text()).strip()
+                    if body.startswith("http"):
+                        return body
+        except Exception as e:  # noqa: BLE001
+            logger.warning("fetch image upload via %s failed: %s", url, e)
+    return None
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -141,6 +176,12 @@ class DragoFetchMod(loader.Module):
                 "show_bars",
                 True,
                 "Показывать живые метрики CPU/RAM/Disk с прогресс-барами.",
+                validator=loader.validators.Boolean(),
+            ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять .fetchimg через инлайн-бота (одним сообщением от бота).",
                 validator=loader.validators.Boolean(),
             ),
             loader.ConfigValue(
@@ -408,6 +449,17 @@ class DragoFetchMod(loader.Module):
                 f"{self.config['title_emoji']} <b>Система</b> · "
                 f"<code>{escape(platform.uname().node)}</code>"
             )
+            # инлайн-режим: карточка одним сообщением от бота
+            if self.config["use_inline"] and getattr(self, "inline", None):
+                url = await _upload_image(img.getvalue())
+                if url:
+                    try:
+                        return await self.inline.form(
+                            message=message, text=_to_bot_emoji(caption), photo=url
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("inline fetch failed, fallback: %s", exc)
+                img.seek(0)
             # как в DragoYAMusic: исходное message + response=/file= (без позиционного текста)
             await utils.answer(message=message, response=caption, file=img)
         except Exception as exc:  # noqa: BLE001
