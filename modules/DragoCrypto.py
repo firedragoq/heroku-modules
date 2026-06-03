@@ -1,10 +1,10 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 2, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: курсы можно отправлять картинкой-карточкой (config as_image)
+# changelog: премиум-эмодзи по умолчанию из набора @vpnfiredragoq_bot, отдельный emoji_coin
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
@@ -104,19 +104,25 @@ class DragoCryptoMod(loader.Module):
             ),
             loader.ConfigValue(
                 "emoji_crypto",
-                "💰",
+                '<emoji document_id=5258076470466617642>💳</emoji>',
                 "Эмодзи заголовка. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
+                "emoji_coin",
+                '<emoji document_id=5258504365173415947>💯</emoji>',
+                "Эмодзи перед каждой монетой в списке.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
                 "emoji_up",
-                "📈",
+                '<emoji document_id=5260464635491949616>🚀</emoji>',
                 "Эмодзи роста за 24ч.",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
                 "emoji_down",
-                "📉",
+                '<emoji document_id=5260319946633681748>🛑</emoji>',
                 "Эмодзи падения за 24ч.",
                 validator=loader.validators.String(),
             ),
@@ -289,7 +295,7 @@ class DragoCryptoMod(loader.Module):
                 arrow = self.config["emoji_up"] if chg >= 0 else self.config["emoji_down"]
                 chg_str = f"{arrow} {chg:+.2f}%"
             rows.append(self.strings("price_row").format(
-                e="🪙",
+                e=self.config["emoji_coin"],
                 name=utils.escape_html(c.get("name", "?")),
                 sym=utils.escape_html((c.get("symbol", "") or "").upper()),
                 cur1=f"{self._fmt(price)} {cur_sign}",
