@@ -1,9 +1,9 @@
-__version__ = (1, 5, 0)
+__version__ = (1, 5, 1)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: автообновление opt-in — инлайн-меню .autoupd с выбором модулей кнопками (по умолч. выкл для всех)
+# changelog: премиум-эмодзи в заголовке инлайн-меню автообновления
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -470,9 +470,12 @@ class DragoModUpdatesMod(loader.Module):
         ])
         return rows
 
+    # заголовок шлёт инлайн-бот → премиум-эмодзи в формате Bot API <tg-emoji>
     _AU_TITLE = (
-        "♻️ <b>Автообновление модулей DragoModules</b>\n\n"
-        "Отметь модули, которые обновлять автоматически (✅).\n"
+        '<tg-emoji emoji-id="5260375398956442465">🔄</tg-emoji> '
+        "<b>Автообновление модулей DragoModules</b>\n\n"
+        "Отметь модули, которые обновлять автоматически "
+        '(<tg-emoji emoji-id="5258387825530807373">✅</tg-emoji>).\n'
         "По умолчанию выключено для всех."
     )
 
@@ -486,7 +489,10 @@ class DragoModUpdatesMod(loader.Module):
         await call.edit(self._AU_TITLE, reply_markup=await self._autoupd_rows())
 
     async def _au_update_now(self, call):
-        await call.edit("♻️ <b>Проверяю выбранные модули…</b>")
+        await call.edit(
+            '<tg-emoji emoji-id="5260375398956442465">🔄</tg-emoji> '
+            "<b>Проверяю выбранные модули…</b>"
+        )
         updated = await self._check_all_updates()
         await call.edit(self._fmt_updated(updated))
 
