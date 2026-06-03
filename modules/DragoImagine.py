@@ -1,13 +1,14 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # meta category: ИИ и текст
 # scope: heroku_only
 # requires: aiohttp
+# changelog: Pollinations закрыл анонимный доступ — добавлен бесплатный токен в конфиг
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoImagine — генерация картинок по тексту (Pollinations).   ║
-# ║  Без API-ключа.                                                ║
+# ║  Нужен бесплатный токен (pollinations.ai).                     ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import io
@@ -22,10 +23,7 @@ from .. import loader, utils
 
 logger = logging.getLogger(__name__)
 
-API = (
-    "https://image.pollinations.ai/prompt/{prompt}"
-    "?width={w}&height={h}&seed={seed}&model={model}&nologo=true"
-)
+BASE = "https://image.pollinations.ai/prompt/{prompt}"
 
 
 def _to_bot_emoji(text: str) -> str:
@@ -50,10 +48,16 @@ class DragoImagineMod(loader.Module):
         "drawing": "{emoji} <b>Рисую…</b> <i>{prompt}</i>",
         "caption": "{emoji} <b>{prompt}</b>\n<i>{model} · {w}×{h}</i>",
         "fail": "🚫 <b>Не удалось сгенерировать:</b> <code>{}</code>",
+        "no_token": (
+            "🔑 <b>Pollinations закрыл бесплатный доступ без токена.</b>\n\n"
+            "1. Зайди на <code>auth.pollinations.ai</code> (вход через GitHub) — бесплатно.\n"
+            "2. Создай токен и впиши его в <code>{p}cfg DragoImagine</code> → <b>token</b>.\n"
+            "После этого <code>{p}img</code> заработает."
+        ),
     }
 
     strings_ru = {
-        "_cls_doc": "🎨 Генерация картинок по тексту (Pollinations, без ключа).",
+        "_cls_doc": "🎨 Генерация картинок по тексту (Pollinations, нужен бесплатный токен).",
         "imgcmd_doc": "<описание> — сгенерировать картинку",
         "no_prompt": (
             "{emoji} <b>Опиши картинку.</b> Пример: "
@@ -62,10 +66,22 @@ class DragoImagineMod(loader.Module):
         "drawing": "{emoji} <b>Рисую…</b> <i>{prompt}</i>",
         "caption": "{emoji} <b>{prompt}</b>\n<i>{model} · {w}×{h}</i>",
         "fail": "🚫 <b>Не удалось сгенерировать:</b> <code>{}</code>",
+        "no_token": (
+            "🔑 <b>Pollinations закрыл бесплатный доступ без токена.</b>\n\n"
+            "1. Зайди на <code>auth.pollinations.ai</code> (вход через GitHub) — бесплатно.\n"
+            "2. Создай токен и впиши его в <code>{p}cfg DragoImagine</code> → <b>token</b>.\n"
+            "После этого <code>{p}img</code> заработает."
+        ),
     }
 
     def __init__(self):
         self.config = loader.ModuleConfig(
+            loader.ConfigValue(
+                "token",
+                "",
+                "Токен Pollinations (бесплатно: auth.pollinations.ai).",
+                validator=loader.validators.Hidden(),
+            ),
             loader.ConfigValue(
                 "model",
                 "flux",
@@ -100,16 +116,19 @@ class DragoImagineMod(loader.Module):
             ),
         )
 
-    def _build_url(self, prompt: str) -> tuple[str, int]:
+    def _build_url(self, prompt: str) -> str:
         seed = random.randint(1, 10_000_000)
-        url = API.format(
-            prompt=quote(prompt, safe=""),
-            w=int(self.config["width"]),
-            h=int(self.config["height"]),
-            seed=seed,
-            model=self.config["model"],
-        )
-        return url, seed
+        params = [
+            f"width={int(self.config['width'])}",
+            f"height={int(self.config['height'])}",
+            f"seed={seed}",
+            f"model={self.config['model']}",
+            "nologo=true",
+        ]
+        token = (self.config["token"] or "").strip()
+        if token:
+            params.append(f"token={quote(token, safe='')}")
+        return BASE.format(prompt=quote(prompt, safe="")) + "?" + "&".join(params)
 
     @loader.command(ru_doc="<описание> — сгенерировать картинку", alias="imagine")
     async def imgcmd(self, message):
@@ -124,8 +143,12 @@ class DragoImagineMod(loader.Module):
             return await utils.answer(
                 message, self.strings("no_prompt").format(emoji=emoji, p=self.get_prefix())
             )
+        if not (self.config["token"] or "").strip():
+            return await utils.answer(
+                message, self.strings("no_token").format(p=self.get_prefix())
+            )
 
-        url, _ = self._build_url(prompt)
+        url = self._build_url(prompt)
         w, h = int(self.config["width"]), int(self.config["height"])
         caption = self.strings("caption").format(
             emoji=emoji, prompt=utils.escape_html(prompt[:200]),
@@ -147,7 +170,8 @@ class DragoImagineMod(loader.Module):
         )
         try:
             timeout = aiohttp.ClientTimeout(total=120)
-            async with aiohttp.ClientSession(timeout=timeout) as s:
+            headers = {"Authorization": f"Bearer {self.config['token'].strip()}"}
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
                 async with s.get(url) as r:
                     r.raise_for_status()
                     data = await r.read()
