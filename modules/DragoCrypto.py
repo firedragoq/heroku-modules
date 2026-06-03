@@ -1,10 +1,10 @@
-__version__ = (1, 4, 0)
+__version__ = (1, 5, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: 7-дневный график в карточке .price; миграция старого конфига (rub + премиум-эмодзи)
+# changelog: инлайн-режим (use_inline) для карточек .price/.conv
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
@@ -13,6 +13,7 @@ __version__ = (1, 4, 0)
 
 import io
 import logging
+import re
 
 import aiohttp
 
@@ -24,6 +25,40 @@ except Exception:  # noqa: BLE001
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
+
+
+async def _upload_image(data: bytes) -> str | None:
+    """Заливает картинку на catbox→0x0, возвращает URL (для инлайн-формы)."""
+    headers = {"User-Agent": "Mozilla/5.0 (DragoCrypto)"}
+    timeout = aiohttp.ClientTimeout(total=30)
+    hosts = [
+        ("https://catbox.moe/user/api.php", "fileToUpload", {"reqtype": "fileupload"}),
+        ("https://0x0.st", "file", {}),
+    ]
+    for url, field, extra in hosts:
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as s:
+                form = aiohttp.FormData()
+                for k, v in extra.items():
+                    form.add_field(k, v)
+                form.add_field(field, data, filename="crypto.png")
+                async with s.post(url, data=form) as r:
+                    body = (await r.text()).strip()
+                    if body.startswith("http"):
+                        return body
+        except Exception as e:  # noqa: BLE001
+            logger.warning("crypto image upload via %s failed: %s", url, e)
+    return None
 
 _FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 
@@ -132,6 +167,12 @@ class DragoCryptoMod(loader.Module):
                 "Отправлять курсы (.price) и конвертацию (.conv) картинкой-карточкой.",
                 validator=loader.validators.Boolean(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Картинку-карточку слать через инлайн-бота (нужно as_image=True).",
+                validator=loader.validators.Boolean(),
+            ),
         )
 
     async def client_ready(self, client, db):
@@ -183,6 +224,20 @@ class DragoCryptoMod(loader.Module):
         if num >= 1:
             return f"{num:,.2f}".replace(",", " ")
         return f"{num:.6f}".rstrip("0").rstrip(".")
+
+    async def _send_card(self, message, img, caption: str):
+        """Шлёт картинку-карточку: через инлайн-бота (use_inline) или от аккаунта."""
+        if self.config["use_inline"] and getattr(self, "inline", None):
+            url = await _upload_image(img.getvalue())
+            if url:
+                try:
+                    return await self.inline.form(
+                        message=message, text=_to_bot_emoji(caption), photo=url
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("inline card failed, fallback: %s", exc)
+        img.seek(0)
+        await utils.answer(message=message, response=caption, file=img)
 
     # ── рендер картинки ─────────────────────────────────────────
     def _font(self, name: str, size: int):
@@ -362,10 +417,8 @@ class DragoCryptoMod(loader.Module):
         if self.config["as_image"] and Image is not None:
             try:
                 img = self._render_image(data, cur_sign)
-                return await utils.answer(
-                    message=message,
-                    response=self.strings("price_head").format(emoji=emoji),
-                    file=img,
+                return await self._send_card(
+                    message, img, self.strings("price_head").format(emoji=emoji)
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("image render failed, fallback to text: %s", exc)
@@ -421,16 +474,15 @@ class DragoCryptoMod(loader.Module):
         if self.config["as_image"] and Image is not None:
             try:
                 img = self._render_conv_image(amount, src, result, dst)
-                return await utils.answer(
-                    message=message,
-                    response=self.strings("conv_result").format(
+                return await self._send_card(
+                    message, img,
+                    self.strings("conv_result").format(
                         emoji=emoji,
                         amount=self._fmt(amount),
                         src=src.upper(),
                         result=self._fmt(result),
                         dst=dst.upper(),
                     ),
-                    file=img,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("conv image render failed, fallback to text: %s", exc)
