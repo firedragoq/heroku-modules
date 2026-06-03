@@ -1,10 +1,10 @@
-__version__ = (1, 2, 0)
+__version__ = (1, 2, 1)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: премиум-эмодзи по умолчанию из набора @vpnfiredragoq_bot, отдельный emoji_coin
+# changelog: валюта котировок по умолчанию — rub; премиум-эмодзи из набора
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
@@ -98,8 +98,8 @@ class DragoCryptoMod(loader.Module):
         self.config = loader.ModuleConfig(
             loader.ConfigValue(
                 "vs_currency",
-                "usd",
-                "Основная валюта котировок (usd, rub, eur…).",
+                "rub",
+                "Основная валюта котировок (rub, usd, eur…).",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
