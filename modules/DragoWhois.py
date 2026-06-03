@@ -1,9 +1,10 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp
+# changelog: премиум-эмодзи 🌐 по умолчанию
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoWhois — инфо по домену и IP (whois, гео, провайдер).     ║
@@ -94,7 +95,7 @@ class DragoWhoisMod(loader.Module):
         self.config = loader.ModuleConfig(
             loader.ConfigValue(
                 "emoji_net",
-                "🌐",
+                "<emoji document_id=5258256103178804244>🌐</emoji>",
                 "Эмодзи заголовка. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
