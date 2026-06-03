@@ -1,10 +1,10 @@
-__version__ = (1, 0, 1)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp
-# changelog: премиум-эмодзи 🌐 по умолчанию
+# changelog: инлайн-режим (use_inline) — ответы .whois/.ip через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoWhois — инфо по домену и IP (whois, гео, провайдер).     ║
@@ -19,6 +19,16 @@ import aiohttp
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 RDAP = "https://rdap.org/domain/{domain}"
 IPAPI = "http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,regionName,city,isp,org,as,query,reverse,timezone,mobile,proxy,hosting&lang=ru"
@@ -99,7 +109,30 @@ class DragoWhoisMod(loader.Module):
                 "Эмодзи заголовка. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять ответы через инлайн-бота (от бота, а не аккаунта).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     async def _get_json(self, url: str):
         timeout = aiohttp.ClientTimeout(total=25)
@@ -122,18 +155,18 @@ class DragoWhoisMod(loader.Module):
         arg = utils.get_args_raw(message).strip().lower()
         arg = _CLEAN.sub("", arg).split("/")[0]
         if not arg:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_arg").format(emoji=emoji, p=self.get_prefix())
             )
-        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+        await self._status(message, self.strings("loading").format(emoji=emoji))
         try:
             status, data = await self._get_json(RDAP.format(domain=arg))
             if status >= 400 or not isinstance(data, dict) or "ldhName" not in data:
-                return await utils.answer(message, self.strings("not_found").format(
+                return await self._reply(message, self.strings("not_found").format(
                     utils.escape_html(arg)))
         except Exception as exc:  # noqa: BLE001
             logger.exception("whois failed: %s", exc)
-            return await utils.answer(msg, self.strings("fail").format(
+            return await self._reply(message, self.strings("fail").format(
                 utils.escape_html(str(exc))))
 
         registrar = "—"
@@ -149,7 +182,7 @@ class DragoWhoisMod(loader.Module):
         ns_list = [n.get("ldhName", "") for n in data.get("nameservers", []) or []]
         ns = "\n".join(f"  • <code>{utils.escape_html(n.lower())}</code>" for n in ns_list) or "  —"
 
-        await utils.answer(
+        await self._reply(
             message,
             self.strings("domain_card").format(
                 emoji=emoji,
@@ -170,18 +203,18 @@ class DragoWhoisMod(loader.Module):
         arg = utils.get_args_raw(message).strip()
         arg = _CLEAN.sub("", arg).split("/")[0]
         if not arg:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_arg").format(emoji=emoji, p=self.get_prefix())
             )
-        msg = await utils.answer(message, self.strings("loading").format(emoji=emoji))
+        await self._status(message, self.strings("loading").format(emoji=emoji))
         try:
             _, data = await self._get_json(IPAPI.format(ip=arg))
         except Exception as exc:  # noqa: BLE001
             logger.exception("ip failed: %s", exc)
-            return await utils.answer(msg, self.strings("fail").format(
+            return await self._reply(message, self.strings("fail").format(
                 utils.escape_html(str(exc))))
         if not isinstance(data, dict) or data.get("status") != "success":
-            return await utils.answer(message, self.strings("not_found").format(
+            return await self._reply(message, self.strings("not_found").format(
                 utils.escape_html(arg)))
 
         flags = []
@@ -193,7 +226,7 @@ class DragoWhoisMod(loader.Module):
             flags.append("📱 мобильная сеть")
         flags_line = ("⚑ " + " · ".join(flags)) if flags else ""
 
-        await utils.answer(
+        await self._reply(
             message,
             self.strings("ip_card").format(
                 emoji=emoji,
