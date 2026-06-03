@@ -1,10 +1,10 @@
-__version__ = (1, 2, 1)
+__version__ = (1, 3, 0)
 
 # meta developer: @dragomodules
 # meta category: Сеть и сайты
 # scope: heroku_only
 # requires: aiohttp pillow
-# changelog: валюта котировок по умолчанию — rub; премиум-эмодзи из набора
+# changelog: .conv тоже умеет картинку-карточку (as_image)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoCrypto — курсы крипты и конвертация валют (без ключей).  ║
@@ -129,7 +129,7 @@ class DragoCryptoMod(loader.Module):
             loader.ConfigValue(
                 "as_image",
                 False,
-                "Отправлять курсы (.price) картинкой-карточкой вместо текста.",
+                "Отправлять курсы (.price) и конвертацию (.conv) картинкой-карточкой.",
                 validator=loader.validators.Boolean(),
             ),
         )
@@ -237,6 +237,42 @@ class DragoCryptoMod(loader.Module):
         buf.seek(0)
         return buf
 
+    def _render_conv_image(self, amount: float, src: str, result: float, dst: str) -> io.BytesIO:
+        f_title = self._font("DejaVuSans-Bold.ttf", 30)
+        f_big = self._font("DejaVuSans-Bold.ttf", 46)
+        f_mid = self._font("DejaVuSans.ttf", 28)
+        f_arrow = self._font("DejaVuSans.ttf", 40)
+
+        W, H = 820, 360
+        img = Image.new("RGB", (W, H), (20, 22, 33))
+        d = ImageDraw.Draw(img)
+        top, bot = (24, 26, 38), (40, 33, 58)
+        for y in range(H):
+            t = y / H
+            d.line([(0, y), (W, y)],
+                   fill=tuple(int(top[i] + (bot[i] - top[i]) * t) for i in range(3)))
+
+        accent = (240, 185, 66)
+        white = (228, 232, 248)
+        muted = (130, 138, 170)
+
+        d.text((36, 30), "DragoCrypto · конвертация", font=f_title, fill=accent)
+        d.line([(36, 80), (W - 36, 80)], fill=(60, 64, 88), width=2)
+
+        def center(text, font, y, fill):
+            w = d.textlength(text, font=font)
+            d.text(((W - w) / 2, y), text, font=font, fill=fill)
+
+        center(f"{self._fmt(amount)} {src.upper()}", f_big, 120, white)
+        center("↓", f_arrow, 190, accent)
+        center(f"{self._fmt(result)} {dst.upper()}", f_big, 250, accent)
+
+        buf = io.BytesIO()
+        buf.name = "dragoconv.png"
+        img.save(buf, "PNG")
+        buf.seek(0)
+        return buf
+
     # ── .price ──────────────────────────────────────────────────
     @loader.command(ru_doc="<монета…> — курс криптовалюты", alias="p")
     async def pricecmd(self, message):
@@ -331,6 +367,24 @@ class DragoCryptoMod(loader.Module):
         if result is None:
             return await utils.answer(message, self.strings("not_found").format(
                 f"{utils.escape_html(src)}→{utils.escape_html(dst)}"))
+
+        # картинкой, если включено и PIL доступен
+        if self.config["as_image"] and Image is not None:
+            try:
+                img = self._render_conv_image(amount, src, result, dst)
+                return await utils.answer(
+                    message=message,
+                    response=self.strings("conv_result").format(
+                        emoji=emoji,
+                        amount=self._fmt(amount),
+                        src=src.upper(),
+                        result=self._fmt(result),
+                        dst=dst.upper(),
+                    ),
+                    file=img,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("conv image render failed, fallback to text: %s", exc)
 
         await utils.answer(
             message,
