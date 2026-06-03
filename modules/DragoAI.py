@@ -1,20 +1,32 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: aiohttp
+# changelog: инлайн-режим (use_inline) — ответы через инлайн-бота
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoAI — чат с ИИ через OpenRouter (нужен бесплатный ключ).  ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import logging
+import re
 
 import aiohttp
 
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 API = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -79,7 +91,30 @@ class DragoAIMod(loader.Module):
                 "Эмодзи ИИ. Можно премиум (шлётся от аккаунта).",
                 validator=loader.validators.String(),
             ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                "Отправлять ответы через инлайн-бота (от бота, а не аккаунта).",
+                validator=loader.validators.Boolean(),
+            ),
         )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
 
     def _history(self) -> list:
         return self.get("history", [])
@@ -120,7 +155,7 @@ class DragoAIMod(loader.Module):
     async def aicmd(self, message):
         """<prompt> — ask the AI"""
         if not self.config["api_key"]:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_key").format(p=self.get_prefix())
             )
         prompt = utils.get_args_raw(message).strip()
@@ -129,21 +164,21 @@ class DragoAIMod(loader.Module):
             quoted = reply.raw_text.strip()
             prompt = f"{prompt}\n\n{quoted}" if prompt else quoted
         if not prompt:
-            return await utils.answer(
+            return await self._reply(
                 message, self.strings("no_prompt").format(p=self.get_prefix())
             )
 
         emoji = self.config["emoji_ai"]
-        msg = await utils.answer(message, self.strings("thinking").format(emoji=emoji))
+        await self._status(message, self.strings("thinking").format(emoji=emoji))
         try:
             answer = await self._ask(prompt)
         except Exception as exc:  # noqa: BLE001
             logger.exception("ai failed: %s", exc)
-            return await utils.answer(
-                msg, self.strings("fail").format(utils.escape_html(str(exc)))
+            return await self._reply(
+                message, self.strings("fail").format(utils.escape_html(str(exc)))
             )
-        await utils.answer(
-            msg,
+        await self._reply(
+            message,
             self.strings("answer").format(emoji=emoji, text=utils.escape_html(answer)),
         )
 
@@ -151,4 +186,4 @@ class DragoAIMod(loader.Module):
     async def airesetcmd(self, message):
         """Clear the conversation context"""
         self.set("history", [])
-        await utils.answer(message, self.strings("cleared"))
+        await self._reply(message, self.strings("cleared"))
