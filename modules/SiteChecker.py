@@ -1,5 +1,6 @@
-__version__ = (2, 4, 0)
-# changelog: индивидуальный интервал проверки на сайт (.siteint)
+__version__ = (2, 5, 0)
+# changelog: анти-флаппинг — статус меняется только после N подряд одинаковых
+#            проверок (confirm_checks), разовые таймауты больше не флудят
 
 # meta developer: @dragomodules
 # scope: heroku_only
@@ -101,6 +102,13 @@ class SiteCheckerMod(loader.Module):
                 15,
                 "Таймаут запроса, секунд (1–60).",
                 validator=loader.validators.Integer(minimum=1, maximum=60),
+            ),
+            loader.ConfigValue(
+                "confirm_checks",
+                2,
+                "Сколько проверок подряд должны совпасть, чтобы сменить статус и "
+                "прислать алерт (анти-флаппинг). 1 = реагировать мгновенно.",
+                validator=loader.validators.Integer(minimum=1, maximum=10),
             ),
             loader.ConfigValue(
                 "notify_chat",
@@ -248,26 +256,40 @@ class SiteCheckerMod(loader.Module):
             return
         now = int(time.time())
         default_int = int(self.config["check_interval"])
+        confirm = max(1, int(self.config["confirm_checks"]))
         for url, info in sites.items():
             every = int(info.get("interval") or default_int) * 60
             if now - info.get("last_check", 0) < every:
                 continue
             info["last_check"] = now
             res = await self._check(url)
-            new_status = "up" if res["ok"] else "down"
-            old_status = info.get("status", "unknown")
+            raw = "up" if res["ok"] else "down"
             info["code"] = res["code"]
             info["ms"] = res["ms"]
             info["error"] = res["error"]
             info["slow"] = res.get("slow", False)
             self._record_stats(info, res)
-            if new_status != old_status:
+
+            status = info.get("status", "unknown")
+            if raw == status:
+                # состояние стабильно — сбрасываем накопленный «переход»
+                info["streak"] = 0
+                info["pending"] = raw
+                continue
+            # копим подтверждения, прежде чем менять статус и слать алерт
+            if info.get("pending") == raw:
+                info["streak"] = int(info.get("streak", 0)) + 1
+            else:
+                info["pending"] = raw
+                info["streak"] = 1
+            if info["streak"] >= confirm:
                 prev_since = info.get("since", 0)
-                info["status"] = new_status
-                info["since"] = int(time.time())
+                info["status"] = raw
+                info["since"] = now
+                info["streak"] = 0
                 # уведомляем только о реальных переходах up<->down
-                if old_status in ("up", "down"):
-                    await self._notify(url, new_status, res, prev_since)
+                if status in ("up", "down"):
+                    await self._notify(url, raw, res, prev_since)
         self.set("sites", sites)
 
     async def _notify(self, url, status, res, prev_since):
