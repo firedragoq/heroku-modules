@@ -1,9 +1,10 @@
-__version__ = (1, 6, 3)
+__version__ = (1, 7, 0)
 
 # meta developer: @dragomodules
 # scope: heroku_only
 # requires: telethon aiohttp
-# changelog: премиум-эмодзи и для 🚫/♻️/⛔ (стоп/обновление/выключено)
+# changelog: ответ на ping от бота (#DragoModPing→#DragoModPong) — бот теперь видит,
+#            что приёмник реально установлен, и не показывает «один тап» вхолостую
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoModUpdates — установка модулей из канала в один тап.     ║
@@ -32,6 +33,10 @@ INSTALL_MARKER = "#HerokuModInstall"
 # обмен списком модулей с ботом (бот — источник ссылок, без GitHub API)
 LIST_REQUEST = "#DragoModListReq"
 LIST_RESULT = "#DragoModListRes"
+
+# живая проверка приёмника: бот шлёт ping — отвечаем pong со своей версией
+PING_MARKER = "#DragoModPing"
+PONG_MARKER = "#DragoModPong"
 
 # репозиторий модулей DragoModules
 _REPO = "firedragoq/heroku-modules"
@@ -624,6 +629,21 @@ class DragoModUpdatesMod(loader.Module):
         if self._bot_id and sender_id != self._bot_id:
             return
         text = message.raw_text or ""
+
+        # пинг от бота — отвечаем pong, чтобы бот знал, что приёмник жив
+        if text.startswith(PING_MARKER):
+            try:
+                await self._client.send_message(
+                    message.chat_id,
+                    f"{PONG_MARKER} {'.'.join(map(str, SELF_VERSION))}",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await message.delete()
+            except Exception:  # noqa: BLE001
+                pass
+            return
 
         # ответ бота со списком модулей (для меню автообновления)
         if text.startswith(LIST_RESULT):
