@@ -1,10 +1,10 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
 # requires: aiohttp
-# changelog: первый релиз — цитата-стикер из реплая (Quotly), аватар, формат, кастом-эмодзи, реплай-баббл
+# changelog: фикс — heroku.utils не имеет get_display_name, имя автора собираем сами
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoQuote — красивые цитаты-стикеры из сообщений (Quotly).  ║
@@ -42,6 +42,22 @@ _ENT_MAP = {
     "MessageEntityMentionName": "text_mention",
     "MessageEntityCustomEmoji": "custom_emoji",
 }
+
+
+def _display_name(entity) -> str:
+    """Имя автора (heroku.utils не имеет get_display_name из telethon)."""
+    if entity is None:
+        return "Deleted Account"
+    first = getattr(entity, "first_name", "") or ""
+    last = getattr(entity, "last_name", "") or ""
+    name = f"{first} {last}".strip()
+    if not name:
+        name = (
+            getattr(entity, "title", "")
+            or getattr(entity, "username", "")
+            or "Deleted Account"
+        )
+    return name
 
 
 def _entities(msg) -> list:
@@ -141,7 +157,7 @@ class DragoQuoteMod(loader.Module):
     async def _build_message(self, m) -> dict:
         """Собирает один объект сообщения для Quotly."""
         sender = await m.get_sender()
-        name = utils.get_display_name(sender) or "Deleted Account"
+        name = _display_name(sender)
         frm = {"id": getattr(sender, "id", 0) or 0, "name": name}
         if getattr(sender, "first_name", None):
             frm["first_name"] = sender.first_name
@@ -167,7 +183,7 @@ class DragoQuoteMod(loader.Module):
                 if r:
                     rs = await r.get_sender()
                     obj["replyMessage"] = {
-                        "name": utils.get_display_name(rs) or "",
+                        "name": _display_name(rs),
                         "text": (r.raw_text or "")[:120],
                         "chatId": getattr(rs, "id", 0) or 0,
                         "entities": [],
