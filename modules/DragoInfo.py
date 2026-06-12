@@ -1,9 +1,9 @@
-__version__ = (1, 0, 1)
+__version__ = (1, 0, 2)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
-# changelog: команда .info → .di (.info занята ядром Heroku); карточка: ID, был в сети, премиум, био, общих чатов, аватар
+# changelog: премиум-иконки в строках карточки (ссылка/верифик/scam/DC/общие чаты); команда .di (.info занята ядром Heroku)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoInfo — карточка пользователя по .info (реплай/@user/id).║
@@ -24,6 +24,14 @@ from telethon.tl.types import (
 from .. import loader, utils
 
 logger = logging.getLogger(__name__)
+
+# премиум-иконки строк карточки (набор @vpnfiredragoq_bot); для не-Premium
+# аккаунтов Telegram сам покажет обычный эмодзи-фоллбэк в тегах
+PE_LINK = "<emoji document_id=5258407500775989445>🔗</emoji>"
+PE_OK = "<emoji document_id=5258387825530807373>✅</emoji>"
+PE_WARN = "<emoji document_id=5260644989758640758>⚠️</emoji>"
+PE_GLOBE = "<emoji document_id=5258256103178804244>🌐</emoji>"
+PE_FAMILY = "<emoji document_id=5260475377205156066>🧑‍🤝‍🧑</emoji>"
 
 
 def _display_name(entity) -> str:
@@ -117,29 +125,29 @@ class DragoInfoMod(loader.Module):
         name = utils.escape_html(_display_name(user))
         rows = [f"{emoji} <b>{name}</b>"]
         if getattr(user, "username", None):
-            rows.append(f"🔗 @{user.username}")
+            rows.append(f"{PE_LINK} @{user.username}")
         rows.append(f"🆔 <code>{user.id}</code>")
 
         flags = []
         if getattr(user, "premium", False):
             flags.append("⭐️ Premium")
         if getattr(user, "verified", False):
-            flags.append("✔️ verified")
+            flags.append(f"{PE_OK} verified")
         if getattr(user, "bot", False):
             flags.append("🤖 бот")
         if getattr(user, "scam", False):
-            flags.append("⚠️ scam")
+            flags.append(f"{PE_WARN} scam")
         if getattr(user, "fake", False):
-            flags.append("⚠️ fake")
+            flags.append(f"{PE_WARN} fake")
         if flags:
             rows.append(" · ".join(flags))
 
         rows.append(f"👁 {_status_text(getattr(user, 'status', None))}")
         dc = getattr(getattr(user, "photo", None), "dc_id", None)
         if dc:
-            rows.append(f"🌍 DC{dc}")
+            rows.append(f"{PE_GLOBE} DC{dc}")
         if common:
-            rows.append(f"🧑‍🤝‍🧑 общих чатов: <b>{common}</b>")
+            rows.append(f"{PE_FAMILY} общих чатов: <b>{common}</b>")
         if about:
             rows.append(f"\n📝 <i>{utils.escape_html(about)}</i>")
         rows.append(f'\n<a href="tg://user?id={user.id}">открыть профиль</a>')
