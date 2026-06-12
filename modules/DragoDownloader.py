@@ -1,10 +1,10 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # meta category: Загрузки
 # scope: heroku_only
 # requires: yt-dlp
-# changelog: первый релиз — .dl ссылка → видео, .dla ссылка → аудио (YouTube/TikTok/Instagram и др., без ключей)
+# changelog: премиум-иконки в подписи и ошибках; .dl ссылка → видео, .dla ссылка → аудио (YouTube/TikTok/Instagram и др.)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoDownloader — .dl <url> → видео, .dla <url> → аудио.     ║
@@ -71,11 +71,11 @@ class DragoDownloaderMod(loader.Module):
         ),
         "loading": "{emoji} <b>Скачиваю…</b> <i>{what}</i>\n<code>{url}</code>",
         "too_big": (
-            "🚫 <b>Файл больше лимита</b> ({mb} МБ). Подними <code>max_mb</code> в "
+            "<emoji document_id=5260319946633681748>🛑</emoji> <b>Файл больше лимита</b> ({mb} МБ). Подними <code>max_mb</code> в "
             "конфиге или скачай аудио (<code>{p}dla</code>)."
         ),
-        "fail": "🚫 <b>Не скачалось:</b>\n<code>{}</code>",
-        "caption": "{emoji} <b>{title}</b>{author}\n<a href=\"{url}\">источник</a>",
+        "fail": "<emoji document_id=5260319946633681748>🛑</emoji> <b>Не скачалось:</b>\n<code>{}</code>",
+        "caption": "{emoji} <b>{title}</b>{author}\n<emoji document_id=5258407500775989445>🔗</emoji> <a href=\"{url}\">источник</a>",
     }
 
     strings_ru = {
@@ -88,11 +88,11 @@ class DragoDownloaderMod(loader.Module):
         ),
         "loading": "{emoji} <b>Скачиваю…</b> <i>{what}</i>\n<code>{url}</code>",
         "too_big": (
-            "🚫 <b>Файл больше лимита</b> ({mb} МБ). Подними <code>max_mb</code> в "
+            "<emoji document_id=5260319946633681748>🛑</emoji> <b>Файл больше лимита</b> ({mb} МБ). Подними <code>max_mb</code> в "
             "конфиге или скачай аудио (<code>{p}dla</code>)."
         ),
-        "fail": "🚫 <b>Не скачалось:</b>\n<code>{}</code>",
-        "caption": "{emoji} <b>{title}</b>{author}\n<a href=\"{url}\">источник</a>",
+        "fail": "<emoji document_id=5260319946633681748>🛑</emoji> <b>Не скачалось:</b>\n<code>{}</code>",
+        "caption": "{emoji} <b>{title}</b>{author}\n<emoji document_id=5258407500775989445>🔗</emoji> <a href=\"{url}\">источник</a>",
     }
 
     def __init__(self):
@@ -159,7 +159,10 @@ class DragoDownloaderMod(loader.Module):
             title = (info.get("title") or os.path.basename(path))[:120]
             uploader = info.get("uploader") or info.get("channel") or ""
             src = info.get("webpage_url") or url
-            author = f"\n👤 {utils.escape_html(uploader)}" if uploader else ""
+            author = (
+                f"\n<emoji document_id=5258400740497466260>🚹</emoji> "
+                f"{utils.escape_html(uploader)}" if uploader else ""
+            )
             caption = self.strings("caption").format(
                 emoji=emoji, title=utils.escape_html(title), author=author,
                 url=utils.escape_html(src),
