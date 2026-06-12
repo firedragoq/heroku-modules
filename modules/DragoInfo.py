@@ -1,9 +1,9 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
-# changelog: первый релиз — .info @user/реплай → карточка: ID, был в сети, премиум, био, общих чатов, аватар
+# changelog: команда .info → .di (.info занята ядром Heroku); карточка: ID, был в сети, премиум, био, общих чатов, аватар
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoInfo — карточка пользователя по .info (реплай/@user/id).║
@@ -71,7 +71,7 @@ class DragoInfoMod(loader.Module):
 
     strings_ru = {
         "_cls_doc": "🚹 Карточка пользователя: ID, был в сети, премиум, био, общих чатов.",
-        "infocmd_doc": "[@user/id] или реплай — карточка пользователя",
+        "dicmd_doc": "[@user/id] или реплай — карточка пользователя",
         "loading": "{emoji} <b>Собираю инфо…</b>",
         "not_user": (
             "{emoji} <b>Это не пользователь.</b>\n<b>{name}</b>\nID: <code>{id}</code>"
@@ -145,8 +145,8 @@ class DragoInfoMod(loader.Module):
         rows.append(f'\n<a href="tg://user?id={user.id}">открыть профиль</a>')
         return "\n".join(rows)
 
-    @loader.command(ru_doc="[@user/id] или реплай — карточка пользователя", alias="info")
-    async def infocmd(self, message):
+    @loader.command(ru_doc="[@user/id] или реплай — карточка пользователя", alias="uinfo")
+    async def dicmd(self, message):
         """[@user/id] or reply — user info card"""
         emoji = self.config["emoji_info"]
         status = await utils.answer(message, self.strings("loading").format(emoji=emoji))
