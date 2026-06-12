@@ -1,10 +1,10 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 0, 1)
 
 # meta developer: @dragomodules
 # meta category: Развлечения
 # scope: heroku_only
 # requires: Pillow aiohttp
-# changelog: первый релиз — .meme (верх|низ) и .dem (демотиватор) по реплаю на картинку
+# changelog: премиум-иконка ошибки; .meme (верх|низ) и .dem (демотиватор) по реплаю на картинку
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoMeme — мем-текст и демотиваторы из картинок по реплаю.  ║
@@ -190,7 +190,7 @@ class DragoMemeMod(loader.Module):
         ),
         "no_text": "{emoji} <b>Дай текст.</b> <code>{p}{cmd} {hint}</code>",
         "making": "{emoji} <b>Рисую…</b>",
-        "fail": "🚫 <b>Ошибка:</b> <code>{}</code>",
+        "fail": "<emoji document_id=5260319946633681748>🛑</emoji> <b>Ошибка:</b> <code>{}</code>",
     }
 
     strings_ru = {
@@ -204,7 +204,7 @@ class DragoMemeMod(loader.Module):
         ),
         "no_text": "{emoji} <b>Дай текст.</b> <code>{p}{cmd} {hint}</code>",
         "making": "{emoji} <b>Рисую…</b>",
-        "fail": "🚫 <b>Ошибка:</b> <code>{}</code>",
+        "fail": "<emoji document_id=5260319946633681748>🛑</emoji> <b>Ошибка:</b> <code>{}</code>",
     }
 
     def __init__(self):
