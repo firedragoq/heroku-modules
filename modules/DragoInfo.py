@@ -1,9 +1,9 @@
-__version__ = (1, 0, 2)
+__version__ = (1, 0, 3)
 
 # meta developer: @dragomodules
 # meta category: Утилиты
 # scope: heroku_only
-# changelog: премиум-иконки в строках карточки (ссылка/верифик/scam/DC/общие чаты); команда .di (.info занята ядром Heroku)
+# changelog: премиум-иконки на всех строках карточки (ID/Premium/статус/ссылка/верифик/DC/общие чаты); команда .di
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoInfo — карточка пользователя по .info (реплай/@user/id).║
@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 # премиум-иконки строк карточки (набор @vpnfiredragoq_bot); для не-Premium
 # аккаунтов Telegram сам покажет обычный эмодзи-фоллбэк в тегах
 PE_LINK = "<emoji document_id=5258407500775989445>🔗</emoji>"
+PE_ID = "<emoji document_id=5258382469706588139>™️</emoji>"
+PE_PREMIUM = "<emoji document_id=5258224737032642313>⭐️</emoji>"
+PE_STATUS = "<emoji document_id=5258450935780254269>🔍</emoji>"
 PE_OK = "<emoji document_id=5258387825530807373>✅</emoji>"
 PE_WARN = "<emoji document_id=5260644989758640758>⚠️</emoji>"
 PE_GLOBE = "<emoji document_id=5258256103178804244>🌐</emoji>"
@@ -126,11 +129,11 @@ class DragoInfoMod(loader.Module):
         rows = [f"{emoji} <b>{name}</b>"]
         if getattr(user, "username", None):
             rows.append(f"{PE_LINK} @{user.username}")
-        rows.append(f"🆔 <code>{user.id}</code>")
+        rows.append(f"{PE_ID} <code>{user.id}</code>")
 
         flags = []
         if getattr(user, "premium", False):
-            flags.append("⭐️ Premium")
+            flags.append(f"{PE_PREMIUM} Premium")
         if getattr(user, "verified", False):
             flags.append(f"{PE_OK} verified")
         if getattr(user, "bot", False):
@@ -142,7 +145,7 @@ class DragoInfoMod(loader.Module):
         if flags:
             rows.append(" · ".join(flags))
 
-        rows.append(f"👁 {_status_text(getattr(user, 'status', None))}")
+        rows.append(f"{PE_STATUS} {_status_text(getattr(user, 'status', None))}")
         dc = getattr(getattr(user, "photo", None), "dc_id", None)
         if dc:
             rows.append(f"{PE_GLOBE} DC{dc}")
