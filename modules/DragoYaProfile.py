@@ -1,5 +1,5 @@
-__version__ = (1, 0, 0)
-# changelog: первый релиз — синхронизация играющего трека Яндекс.Музыки с музыкой в профиле Telegram
+__version__ = (1, 0, 1)
+# changelog: пауза больше не считается «ничего не играет» (трек ставится и на паузе); снятие при паузе вынесено в опцию clear_on_pause
 
 # meta developer: @dragomodules
 # meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/modules/DragoYaProfile.py
@@ -243,7 +243,13 @@ class DragoYaProfileMod(loader.Module):
             loader.ConfigValue(
                 "clear_when_idle",
                 True,
-                "Снимать трек с профиля, когда музыка встала/на паузе.",
+                "Снимать трек с профиля, когда в очереди Яндекса ничего нет.",
+                validator=loader.validators.Boolean(),
+            ),
+            loader.ConfigValue(
+                "clear_on_pause",
+                False,
+                "Снимать трек с профиля на паузе (по умолчанию пауза профиль не трогает).",
                 validator=loader.validators.Boolean(),
             ),
             loader.ConfigValue(
@@ -294,8 +300,6 @@ class DragoYaProfileMod(loader.Module):
             )
             if not respond.get("success") or not respond.get("track"):
                 return None
-            if respond.get("paused"):
-                return None
             track = respond["track"][0]
             artists = [a.name for a in getattr(track, "artists", [])]
             albums = getattr(track, "albums", [])
@@ -312,6 +316,7 @@ class DragoYaProfileMod(loader.Module):
                 "duration_ms": _to_int(getattr(track, "duration_ms", 0))
                 or _to_int(respond.get("duration_ms", 0)),
                 "cover": cover,
+                "paused": bool(respond.get("paused")),
             }
         except Exception as e:  # noqa: BLE001
             logger.error(f"Ошибка получения трека: {e}")
@@ -416,9 +421,12 @@ class DragoYaProfileMod(loader.Module):
         try:
             track = await self._get_track()
             if not track:
-                # ничего не играет / пауза — по желанию чистим профиль
+                # в очереди Яндекса ничего нет — по желанию чистим профиль
                 if self.config["clear_when_idle"]:
                     await self._unsave_current()
+                return
+            if track["paused"] and self.config["clear_on_pause"]:
+                await self._unsave_current()
                 return
             if self._current and track["track_id"] == self._current.get("track_id"):
                 return  # тот же трек уже в профиле
