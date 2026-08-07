@@ -1,11 +1,12 @@
-__version__ = (1, 0, 1)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # scope: terminal_access_true
-# changelog: иконка 🪐 и описание в каталоге
+# changelog: создание, изменение и отправка файлов через AI
 
 import asyncio
 import html
+import io
 import json
 import re
 import time
@@ -20,6 +21,15 @@ SYSTEM_PROMPT = (
     "Ты — Codex, системный администратор. Отвечай кратко и понятно. "
     "Не используй жирный текст (**). "
     "НИКОГДА не указывай пароли, токены, API ключи или конфиденциальные данные."
+)
+
+MAX_INPUT_FILE_SIZE = 2 * 1024 * 1024
+FILE_REQUEST_RE = re.compile(
+    r"\b(созда(?:й|ть|йте)|сдела(?:й|ть|йте)|"
+    r"измен(?:и|ить|ите)|отредактиру(?:й|йте)|перепиши|"
+    r"добавь|удали|замени|исправь|обнови|отправь|"
+    r"create|edit|modify|rewrite|update|fix|send)\w*\b",
+    re.IGNORECASE,
 )
 
 DANGEROUS_PATTERNS = [
@@ -47,7 +57,7 @@ class ServerCodexMod(loader.Module):
     strings = {
         "name": "ServerCodex",
         "_cls_doc": "🪐 Server Codex: AI-ядро управления сервером (Gemini/OpenRouter).",
-        "info": "🪐 **Server Codex (v10.0.0)**\n🫶 **Разработчик: @firedragoq**",
+        "info": "🪐 **Server Codex (v1.1.0)**\n🫶 **Разработчик: @firedragoq**",
     }
 
     strings_ru = {
@@ -188,6 +198,64 @@ class ServerCodexMod(loader.Module):
         if self._provider == "openrouter":
             return await self._ask_openrouter(prompt, fast=fast)
         return await self._ask_gemini(prompt, fast=fast)
+
+    async def _ask_file_ai(self, prompt):
+        """Ask for a complete file without the short-answer token limit."""
+        self._ensure_provider()
+        if not self.model:
+            self._init_ai()
+        if not self.model:
+            return "❌ Настройте API ключ для выбранного провайдера"
+
+        if self._provider == "openclaw":
+            return await self._ask_openclaw(prompt)
+        if self._provider == "openrouter":
+            return await self._ask_openrouter_file(prompt)
+
+        try:
+            res = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.model.generate_content,
+                    prompt,
+                    generation_config={"temperature": 0, "max_output_tokens": 8192},
+                ),
+                timeout=float(self.config["API_TIMEOUT"]),
+            )
+            return res.text
+        except asyncio.TimeoutError:
+            return "❌ Тайм-аут Gemini API"
+        except Exception as e:
+            return f"❌ Gemini: {e}"
+
+    async def _ask_openrouter_file(self, prompt):
+        try:
+            session = self._get_session()
+            async with session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                json={
+                    "model": self.openrouter_model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": 10000,
+                },
+                headers={
+                    "Authorization": f"Bearer {self.openrouter_key}",
+                    "HTTP-Referer": "https://github.com",
+                    "X-Title": "ServerCodex",
+                },
+                timeout=aiohttp.ClientTimeout(total=float(self.config["API_TIMEOUT"])),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data["choices"][0]["message"]["content"]
+                return f"❌ OpenRouter ({resp.status}): {(await resp.text())[:200]}"
+        except asyncio.TimeoutError:
+            return "❌ Тайм-аут OpenRouter API"
+        except Exception as e:
+            return f"❌ OpenRouter: {e}"
 
     async def _ask_gemini(self, prompt, fast=False):
         try:
@@ -352,6 +420,115 @@ class ServerCodexMod(loader.Module):
             return f"🟣 {self.config['OPENCLAW_MODEL']}"
         return f"🔵 {self.config['DEFAULT_MODEL']}"
 
+    @staticmethod
+    def _safe_filename(name):
+        name = (name or "file.txt").replace("\\", "/").rsplit("/", 1)[-1]
+        name = re.sub(r"[^\w.()\- ]", "_", name, flags=re.UNICODE).strip(" .")
+        return name[:120] or "file.txt"
+
+    @staticmethod
+    def _document_name(reply):
+        if not reply or not reply.document:
+            return None
+        for attr in getattr(reply.document, "attributes", []):
+            name = getattr(attr, "file_name", None)
+            if name:
+                return name
+        return "file.txt"
+
+    @staticmethod
+    def _extract_file_result(raw, fallback_name):
+        text = raw.strip()
+        fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+        candidate = fenced.group(1) if fenced else text
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            start, end = text.find("{"), text.rfind("}")
+            if start < 0 or end <= start:
+                raise ValueError("ИИ не вернул файл в JSON-формате")
+            try:
+                data = json.loads(text[start:end + 1])
+            except json.JSONDecodeError as exc:
+                raise ValueError("ИИ вернул некорректный JSON") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("content"), str):
+            raise ValueError("В ответе ИИ нет текста файла")
+        return data.get("filename") or fallback_name, data["content"]
+
+    @staticmethod
+    def _target_chat(query, current_peer):
+        # Explicit @username or numeric id after "chat/to" wins. Otherwise send here.
+        match = re.search(
+            r"(?:чат(?:е|а|у)?|chat|to)\s*(?:с\s*id\s*)?[:=]?\s*"
+            r"(@[A-Za-z][A-Za-z0-9_]{3,}|-100\d{5,}|\d{5,})",
+            query,
+            re.IGNORECASE,
+        )
+        if not match:
+            match = re.search(
+                r"(?:отправ\w*|send)\s+(?:в|to)?\s*"
+                r"(@[A-Za-z][A-Za-z0-9_]{3,}|-100\d{5,})",
+                query,
+                re.IGNORECASE,
+            )
+        if not match:
+            return current_peer
+        target = match.group(1)
+        return int(target) if target.lstrip("-").isdigit() else target
+
+    async def _handle_file_request(self, message, query, reply):
+        original_name = self._document_name(reply)
+        original_content = None
+
+        if original_name:
+            size = getattr(reply.document, "size", 0) or 0
+            if size > MAX_INPUT_FILE_SIZE:
+                return await utils.answer(message, "❌ Файл больше 2 МБ. Для AI-редактирования нужен текстовый файл до 2 МБ.")
+            try:
+                payload = await reply.download_media(bytes)
+                original_content = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                return await utils.answer(message, "❌ Пока можно изменять только текстовые UTF-8 файлы.")
+            except Exception as e:
+                return await utils.answer(message, f"❌ Не удалось скачать файл: {e}")
+
+        mode = "измени существующий файл" if original_content is not None else "создай новый файл"
+        source = (
+            f"\nИмя исходного файла: {original_name}\n"
+            f"Исходное содержимое:\n<file>\n{original_content}\n</file>"
+            if original_content is not None else ""
+        )
+        prompt = f"""Твоя задача: {mode}.
+Запрос пользователя: {query}{source}
+
+Верни ТОЛЬКО валидный JSON без markdown:
+{{"filename":"name.ext","content":"полное содержимое готового файла"}}
+Не пиши объяснений. Не сокращай и не пропускай неизменённые части файла."""
+
+        raw = await self._ask_file_ai(prompt)
+        if not raw or raw.startswith("❌"):
+            return await utils.answer(message, raw or "❌ ИИ не вернул файл")
+        try:
+            filename, content = self._extract_file_result(raw, original_name or "file.txt")
+        except ValueError as e:
+            return await utils.answer(message, f"❌ {e}")
+
+        filename = self._safe_filename(filename)
+        output = io.BytesIO(content.encode("utf-8"))
+        output.name = filename
+        target = self._target_chat(query, message.peer_id)
+        try:
+            await self._client.send_file(
+                target,
+                output,
+                caption=f"🧠 ServerCodex: {filename}",
+                force_document=True,
+            )
+        except Exception as e:
+            return await utils.answer(message, f"❌ Не удалось отправить файл: {e}")
+        where = "в этот чат" if target == message.peer_id else f"в {target}"
+        await utils.answer(message, f"✅ Файл <code>{html.escape(filename)}</code> отправлен {where}.", parse_mode="html")
+
     @loader.command(alias="sc")
     async def sccmd(self, message):
         """<запрос> — Умный ответ от AI (анализ, команды, вопросы)"""
@@ -363,6 +540,9 @@ class ServerCodexMod(loader.Module):
         await utils.answer(message, "🧠 `Думаю...`")
 
         reply = await message.get_reply_message()
+        if FILE_REQUEST_RE.search(query) and ((reply and reply.document) or re.search(r"\b(файл|file)\w*\b", query, re.IGNORECASE)):
+            return await self._handle_file_request(message, query, reply)
+
         code_context = ""
         if reply and (reply.text or reply.document):
             if reply.text:
