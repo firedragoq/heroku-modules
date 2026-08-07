@@ -1,8 +1,8 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 1, 1)
 
 # meta developer: @dragomodules
 # scope: terminal_access_true
-# changelog: создание, изменение и отправка файлов через AI
+# changelog: отдельный увеличенный тайм-аут AI для файловых операций
 
 import asyncio
 import html
@@ -57,7 +57,7 @@ class ServerCodexMod(loader.Module):
     strings = {
         "name": "ServerCodex",
         "_cls_doc": "🪐 Server Codex: AI-ядро управления сервером (Gemini/OpenRouter).",
-        "info": "🪐 **Server Codex (v1.1.0)**\n🫶 **Разработчик: @firedragoq**",
+        "info": "🪐 **Server Codex (v1.1.1)**\n🫶 **Разработчик: @firedragoq**",
     }
 
     strings_ru = {
@@ -93,6 +93,10 @@ class ServerCodexMod(loader.Module):
             loader.ConfigValue(
                 "API_TIMEOUT", 15, "⏱️ Таймаут API (сек)",
                 validator=loader.validators.Integer(minimum=5, maximum=300),
+            ),
+            loader.ConfigValue(
+                "FILE_API_TIMEOUT", 120, "📄 Таймаут AI для файлов (сек)",
+                validator=loader.validators.Integer(minimum=30, maximum=600),
             ),
             loader.ConfigValue("SAFE_MODE", True, "🔒 Безопасный режим"),
             loader.ConfigValue("LOG_COMMANDS", True, "📋 Логировать команды"),
@@ -212,6 +216,7 @@ class ServerCodexMod(loader.Module):
         if self._provider == "openrouter":
             return await self._ask_openrouter_file(prompt)
 
+        timeout = float(self.config["FILE_API_TIMEOUT"])
         try:
             res = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -219,15 +224,16 @@ class ServerCodexMod(loader.Module):
                     prompt,
                     generation_config={"temperature": 0, "max_output_tokens": 8192},
                 ),
-                timeout=float(self.config["API_TIMEOUT"]),
+                timeout=timeout,
             )
             return res.text
         except asyncio.TimeoutError:
-            return "❌ Тайм-аут Gemini API"
+            return f"❌ Тайм-аут Gemini API ({timeout:g} с)"
         except Exception as e:
             return f"❌ Gemini: {e}"
 
     async def _ask_openrouter_file(self, prompt):
+        timeout = float(self.config["FILE_API_TIMEOUT"])
         try:
             session = self._get_session()
             async with session.post(
@@ -246,14 +252,14 @@ class ServerCodexMod(loader.Module):
                     "HTTP-Referer": "https://github.com",
                     "X-Title": "ServerCodex",
                 },
-                timeout=aiohttp.ClientTimeout(total=float(self.config["API_TIMEOUT"])),
+                timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return data["choices"][0]["message"]["content"]
                 return f"❌ OpenRouter ({resp.status}): {(await resp.text())[:200]}"
         except asyncio.TimeoutError:
-            return "❌ Тайм-аут OpenRouter API"
+            return f"❌ Тайм-аут OpenRouter API ({timeout:g} с)"
         except Exception as e:
             return f"❌ OpenRouter: {e}"
 
