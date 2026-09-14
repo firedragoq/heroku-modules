@@ -1,16 +1,16 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # meta category: Безопасность
 # scope: heroku_only
 # requires: telethon
-# changelog: форк PM->BL под @dragomodules — RU-first, свой баннер, чистка мультиязычия и мёртвого pmblsett
+# changelog: команды под @dragomodules — .dpm/.dpmallow/.dpmlast (старые pmbl/allowpm/pmbanlast остались алиасами)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPMBL — страж лички. Банит и репортит незнакомцев,      ║
 # ║  которые пишут первыми, до одобрения.                        ║
-# ║  .pmbl — вкл/выкл · .allowpm — впустить в ЛС ·               ║
-# ║  .pmbanlast N — снести N последних диалогов после рейда.     ║
+# ║  .dpm — вкл/выкл · .dpmallow — впустить в ЛС ·               ║
+# ║  .dpmlast N — снести N последних диалогов после рейда.       ║
 # ╚══════════════════════════════════════════════════════════════╝
 #
 # Идея и оригинал: PM->BL © hikariatama (AGPLv3). Форк под @dragomodules.
@@ -54,7 +54,7 @@ class DragoPMBLMod(loader.Module):
             "<i>Репорт спама — {}\nУдалять диалог — {}</i>"
         ),
         "args_pmban": (
-            f"{PE_WARN} <b>Пример:</b> <code>{{p}}pmbanlast 5</code>"
+            f"{PE_WARN} <b>Пример:</b> <code>{{p}}dpmlast 5</code>"
         ),
         "banned": (
             "🛡 <b>Привет •ᴗ•</b>\n"
@@ -77,9 +77,9 @@ class DragoPMBLMod(loader.Module):
 
     strings_ru = {
         "_cls_doc": "🔒 Банит и репортит входящие сообщения от незнакомцев.",
-        "pmblcmd_doc": "включить или выключить защиту",
-        "pmbanlastcmd_doc": "<N> — забанить и снести N последних диалогов",
-        "allowpmcmd_doc": "<реплай/юзер> — впустить пользователя в ЛС",
+        "dpmcmd_doc": "включить или выключить защиту",
+        "dpmlastcmd_doc": "<N> — забанить и снести N последних диалогов",
+        "dpmallowcmd_doc": "<реплай/юзер> — впустить пользователя в ЛС",
     }
 
     def __init__(self):
@@ -143,7 +143,7 @@ class DragoPMBLMod(loader.Module):
         self._ratelimit_threshold = 10
 
     @loader.command(ru_doc="включить или выключить защиту", alias="pmbl")
-    async def pmblcmd(self, message: Message):
+    async def dpmcmd(self, message: Message):
         """toggle protection"""
         new = not self.get("state", False)
         self.set("state", new)
@@ -156,8 +156,8 @@ class DragoPMBLMod(loader.Module):
             ),
         )
 
-    @loader.command(ru_doc="<N> — забанить и снести N последних диалогов")
-    async def pmbanlastcmd(self, message: Message):
+    @loader.command(ru_doc="<N> — забанить и снести N последних диалогов", alias="pmbanlast")
+    async def dpmlastcmd(self, message: Message):
         """<N> — ban and delete dialogs with N newest users"""
         n = utils.get_args_raw(message)
         if not n or not n.isdigit():
@@ -208,7 +208,7 @@ class DragoPMBLMod(loader.Module):
         logger.debug("User approved in pm %s, filter: %s", user, reason)
 
     @loader.command(ru_doc="<реплай/юзер> — впустить пользователя в ЛС", alias="allowpm")
-    async def allowpmcmd(self, message: Message):
+    async def dpmallowcmd(self, message: Message):
         """<reply/user> — allow user to pm you"""
         args = utils.get_args_raw(message)
         reply = await message.get_reply_message()
@@ -383,7 +383,7 @@ class DragoPMBLMod(loader.Module):
 
         self._ban_queue += [message]
 
-    @loader.debug_method(name="unwhitelist")
+    @loader.debug_method(name="dpmdeny")
     async def denypm(self, message: Message):
         user = (await message.get_reply_message()).sender_id
         self.set("whitelist", list(set(self.get("whitelist", [])) - {user}))
