@@ -1,4 +1,4 @@
-__version__ = (1, 4, 0)
+__version__ = (1, 4, 1)
 
 # meta developer: @dragomodules
 # meta category: Безопасность
@@ -6,7 +6,7 @@ __version__ = (1, 4, 0)
 # meta banner: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/assets/DragoPMBL.jpg
 # scope: heroku_only
 # requires: telethon
-# changelog: авто-разбан (auto_unblock) — пишешь в ЛС забаненному → он снимается из ЧС и одобряется
+# changelog: команда одобрения .dpmallow теперь сама снимает из ЧС (разбан) при одобрении
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPMBL — страж лички. Банит и репортит незнакомцев,      ║
@@ -77,17 +77,14 @@ class DragoPMBLMod(loader.Module):
         "removed": "{ok} <b>Готово, снёс {n} последних диалогов.</b>",
         "user_not_specified": "{warn} <b>Не указан пользователь.</b>",
         "approved": (
-            '{ok} <b><a href="tg://user?id={uid}">{name}</a> впущен в ЛС.</b>'
+            '{ok} <b><a href="tg://user?id={uid}">{name}</a> одобрен:</b> '
+            "снят из ЧС и впущен в ЛС."
         ),
         "forgotten": (
             '{ok} <b><a href="tg://user?id={uid}">{name}</a> забыт:</b> убран из памяти '
             "и разблокирован. Можно писать заново для теста."
         ),
         "reset": "{ok} <b>Память очищена.</b> Забыл записей: <b>{n}</b>.",
-        "auto_unblocked": (
-            '{ok} <b>Разблокировал <a href="tg://user?id={uid}">{name}</a></b> — '
-            "ты написал ему в ЛС. Снял из ЧС и одобрил."
-        ),
         "wl_empty": "{shield} <b>Память пуста</b> — никто ещё не обработан.",
         "wl_list": "{shield} <b>В памяти записей: {n}</b>\n{rows}",
         "banned_log": (
@@ -189,17 +186,10 @@ class DragoPMBLMod(loader.Module):
                 lambda: "Ответы команд — через инлайн-бота (от бота, а не аккаунта).",
                 validator=loader.validators.Boolean(),
             ),
-            loader.ConfigValue(
-                "auto_unblock",
-                True,
-                lambda: "Если сам пишешь в ЛС забаненному — авто-разбан и одобрение.",
-                validator=loader.validators.Boolean(),
-            ),
         )
 
     async def client_ready(self):
         self._whitelist = self.get("whitelist", [])
-        self._banned = self.get("banned", [])  # кого заблокировал именно модуль
         self._ratelimit = []
         self._ratelimit_timeout = 5 * 60
         self._ratelimit_threshold = 10
@@ -299,40 +289,9 @@ class DragoPMBLMod(loader.Module):
         self._whitelist = ids
         self.set("whitelist", ids)
 
-    def _set_banned(self, ids) -> None:
-        """Память заблокированных модулем (для авто-разбана при ответе)."""
-        ids = list(set(ids))
-        self._banned = ids
-        self.set("banned", ids)
-
     def _approve(self, user: int, reason: str = "unknown"):
         self._set_whitelist(self._whitelist + [user])
         logger.debug("User approved in pm %s, filter: %s", user, reason)
-
-    async def _maybe_unblock_on_reply(self, message: Message) -> None:
-        """Исходящее в ЛС забаненному → авто-разбан + одобрение."""
-        if not self.config["auto_unblock"]:
-            return
-        peer_id = utils.get_chat_id(message)
-        if peer_id not in self._banned:
-            return
-
-        self._set_banned([x for x in self._banned if x != peer_id])
-        with contextlib.suppress(Exception):
-            await self._client(UnblockRequest(id=peer_id))
-        self._approve(peer_id, "owner_replied")
-
-        name = str(peer_id)
-        with contextlib.suppress(Exception):
-            name = utils.escape_html(get_display_name(await self._client.get_entity(peer_id)))
-        with contextlib.suppress(Exception):
-            await self.inline.bot.send_message(
-                self._client.tg_id,
-                _to_bot_emoji(self._s("auto_unblocked", uid=peer_id, name=name)),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-        logger.info("Auto-unblocked %s (owner replied)", peer_id)
 
     async def _resolve_user(self, message: Message):
         """Достаёт юзера из реплая / аргумента (id/@username) / текущего лс. None — если не вышло."""
@@ -360,6 +319,9 @@ class DragoPMBLMod(loader.Module):
             return
 
         self._approve(user.id, "manual_approve")
+        with contextlib.suppress(Exception):
+            await self._client(UnblockRequest(id=user.id))  # снимаем из ЧС при одобрении
+
         await self._reply(
             message,
             self._s("approved", uid=user.id, name=utils.escape_html(get_display_name(user))),
@@ -376,7 +338,6 @@ class DragoPMBLMod(loader.Module):
             return
 
         self._set_whitelist([u for u in self._whitelist if u != user.id])
-        self._set_banned([b for b in self._banned if b != user.id])
         with contextlib.suppress(Exception):
             await self._client(UnblockRequest(id=user.id))
 
@@ -407,20 +368,18 @@ class DragoPMBLMod(loader.Module):
 
     @loader.watcher()
     async def watcher(self, message: Message):
-        if not isinstance(message, Message) or not isinstance(message.peer_id, PeerUser):
-            return
-
-        # исходящее в ЛС забаненному → авто-разбан и одобрение
-        if getattr(message, "out", False):
-            await self._maybe_unblock_on_reply(message)
-            return
-
-        # входящее: фильтрация незнакомцев
-        if not self.get("state", False) or utils.get_chat_id(message) in {
-            1271266957,  # @replies
-            777000,  # Telegram Notifications
-            self._tg_id,  # сам аккаунт
-        }:
+        if (
+            getattr(message, "out", False)
+            or not isinstance(message, Message)
+            or not isinstance(message.peer_id, PeerUser)
+            or not self.get("state", False)
+            or utils.get_chat_id(message)
+            in {
+                1271266957,  # @replies
+                777000,  # Telegram Notifications
+                self._tg_id,  # сам аккаунт
+            }
+        ):
             return
 
         self._queue += [message]
@@ -509,7 +468,6 @@ class DragoPMBLMod(loader.Module):
             )
 
         self._approve(message.sender_id, "banned")
-        self._set_banned(self._banned + [message.sender_id])
         logger.warning("Intruder punished: %s", message.sender_id)
 
     @loader.loop(interval=0.01, autostart=True)
