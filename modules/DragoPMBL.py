@@ -1,10 +1,12 @@
-__version__ = (1, 1, 0)
+__version__ = (1, 2, 0)
 
 # meta developer: @dragomodules
 # meta category: Безопасность
+# meta pic: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/assets/DragoPMBL.jpg
+# meta banner: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/assets/DragoPMBL.jpg
 # scope: heroku_only
 # requires: telethon
-# changelog: команды под @dragomodules — .dpm/.dpmallow/.dpmlast (старые pmbl/allowpm/pmbanlast остались алиасами)
+# changelog: премиум-эмодзи в конфиг + инлайн-режим (use_inline) + баннер модуля; фикс премиум-эмодзи в логе бана
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPMBL — страж лички. Банит и репортит незнакомцев,      ║
@@ -17,6 +19,7 @@ __version__ = (1, 1, 0)
 
 import contextlib
 import logging
+import re
 import time
 from typing import Optional
 
@@ -29,12 +32,22 @@ from .. import loader, utils
 
 logger = logging.getLogger(__name__)
 
-# премиум-иконки (набор @vpnfiredragoq_bot); для не-Premium показывается фоллбэк
+# премиум-иконки (набор @vpnfiredragoq_bot); дефолты для конфига, можно менять
 PE_SHIELD = "<emoji document_id=5258244463817433519>🔒</emoji>"
 PE_STOP = "<emoji document_id=5260319946633681748>🛑</emoji>"
 PE_OK = "<emoji document_id=5258387825530807373>✅</emoji>"
 PE_WARN = "<emoji document_id=5260644989758640758>⚠️</emoji>"
 PE_LINK = "<emoji document_id=5258407500775989445>🔗</emoji>"
+
+
+def _to_bot_emoji(text: str) -> str:
+    """Телетоновский <emoji document_id=ID> → Bot API <tg-emoji emoji-id=ID> (для инлайна/бота)."""
+    return re.sub(
+        r"<emoji document_id=(\d+)>(.*?)</emoji>",
+        r'<tg-emoji emoji-id="\1">\2</tg-emoji>',
+        text,
+        flags=re.DOTALL,
+    )
 
 
 def _yn(state: Optional[bool]) -> str:
@@ -50,28 +63,26 @@ class DragoPMBLMod(loader.Module):
     strings = {
         "name": "DragoPMBL",
         "state": (
-            f"{PE_SHIELD} <b>DragoPMBL теперь {{}}</b>\n"
-            "<i>Репорт спама — {}\nУдалять диалог — {}</i>"
+            "{shield} <b>DragoPMBL теперь {state}</b>\n"
+            "<i>Репорт спама — {rep}\nУдалять диалог — {dele}</i>"
         ),
-        "args_pmban": (
-            f"{PE_WARN} <b>Пример:</b> <code>{{p}}dpmlast 5</code>"
-        ),
+        "args_pmban": "{warn} <b>Пример:</b> <code>{p}dpmlast 5</code>",
         "banned": (
-            "🛡 <b>Привет •ᴗ•</b>\n"
+            "{shield} <b>Привет •ᴗ•</b>\n"
             "<b>Страж</b> этого аккаунта на связи. Ты <b>ещё не одобрен</b>, "
             "поэтому из соображений безопасности я вынужден тебя заблокировать.\n"
             "Если нужна помощь — напиши владельцу <b>в общий чат</b>."
         ),
-        "removing": f"{PE_STOP} <b>Удаляю {{}} последних диалогов…</b>",
-        "removed": f"{PE_OK} <b>Готово, снёс {{}} последних диалогов.</b>",
-        "user_not_specified": f"{PE_WARN} <b>Не указан пользователь.</b>",
+        "removing": "{ban} <b>Удаляю {n} последних диалогов…</b>",
+        "removed": "{ok} <b>Готово, снёс {n} последних диалогов.</b>",
+        "user_not_specified": "{warn} <b>Не указан пользователь.</b>",
         "approved": (
-            f"{PE_OK} <b><a href=\"tg://user?id={{}}\">{{}}</a> впущен в ЛС.</b>"
+            '{ok} <b><a href="tg://user?id={uid}">{name}</a> впущен в ЛС.</b>'
         ),
         "banned_log": (
-            f"{PE_STOP} <b>Заблокировал <a href=\"tg://user?id={{}}\">{{}}</a>.</b>\n\n"
-            "<b>{} Репорт спама</b>\n<b>{} Удалён диалог</b>\n\n"
-            "<b>📝 Сообщение:</b>\n<code>{}</code>"
+            '{ban} <b>Заблокировал <a href="tg://user?id={uid}">{name}</a>.</b>\n\n'
+            "<b>{rep} Репорт спама</b>\n<b>{dele} Удалён диалог</b>\n\n"
+            "<b>📝 Сообщение:</b>\n<code>{text}</code>"
         ),
     }
 
@@ -134,6 +145,36 @@ class DragoPMBLMod(loader.Module):
                 lambda: "Ничего не отправлять забаненному.",
                 validator=loader.validators.Boolean(),
             ),
+            loader.ConfigValue(
+                "emoji_shield",
+                PE_SHIELD,
+                lambda: "Эмодзи-акцент «щит». Премиум (<emoji document_id=…>) или обычный.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_ok",
+                PE_OK,
+                lambda: "Эмодзи «ок». Премиум или обычный.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_ban",
+                PE_STOP,
+                lambda: "Эмодзи «бан/стоп». Премиум или обычный.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "emoji_warn",
+                PE_WARN,
+                lambda: "Эмодзи «предупреждение». Премиум или обычный.",
+                validator=loader.validators.String(),
+            ),
+            loader.ConfigValue(
+                "use_inline",
+                False,
+                lambda: "Ответы команд — через инлайн-бота (от бота, а не аккаунта).",
+                validator=loader.validators.Boolean(),
+            ),
         )
 
     async def client_ready(self):
@@ -142,17 +183,49 @@ class DragoPMBLMod(loader.Module):
         self._ratelimit_timeout = 5 * 60
         self._ratelimit_threshold = 10
 
+    # ── helpers ──────────────────────────────────────────────────────────
+
+    def _s(self, key: str, **kwargs) -> str:
+        """Строка с автоподстановкой эмодзи из конфига + доп. плейсхолдеры."""
+        return self.strings(key).format(
+            shield=self.config["emoji_shield"],
+            ok=self.config["emoji_ok"],
+            ban=self.config["emoji_ban"],
+            warn=self.config["emoji_warn"],
+            **kwargs,
+        )
+
+    @property
+    def _inline_on(self) -> bool:
+        return bool(self.config["use_inline"]) and getattr(self, "inline", None) is not None
+
+    async def _reply(self, message, text: str):
+        if self._inline_on:
+            try:
+                return await self.inline.form(message=message, text=_to_bot_emoji(text))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("inline reply failed, fallback: %s", exc)
+        return await utils.answer(message, text)
+
+    async def _status(self, message, text: str):
+        if self._inline_on:
+            return message
+        return await utils.answer(message, text)
+
+    # ── commands ─────────────────────────────────────────────────────────
+
     @loader.command(ru_doc="включить или выключить защиту", alias="pmbl")
     async def dpmcmd(self, message: Message):
         """toggle protection"""
         new = not self.get("state", False)
         self.set("state", new)
-        await utils.answer(
+        await self._reply(
             message,
-            self.strings("state").format(
-                "включён 🟢" if new else "выключен 🔴",
-                _yn(self.config["report_spam"]),
-                _yn(self.config["delete_dialog"]),
+            self._s(
+                "state",
+                state="включён 🟢" if new else "выключен 🔴",
+                rep=_yn(self.config["report_spam"]),
+                dele=_yn(self.config["delete_dialog"]),
             ),
         )
 
@@ -161,13 +234,11 @@ class DragoPMBLMod(loader.Module):
         """<N> — ban and delete dialogs with N newest users"""
         n = utils.get_args_raw(message)
         if not n or not n.isdigit():
-            await utils.answer(
-                message, self.strings("args_pmban").format(p=self.get_prefix())
-            )
+            await self._reply(message, self._s("args_pmban", p=self.get_prefix()))
             return
 
         n = int(n)
-        await utils.answer(message, self.strings("removing").format(n))
+        await self._status(message, self._s("removing", n=n))
 
         dialogs = []
         async for dialog in self._client.iter_dialogs(ignore_pinned=True):
@@ -199,7 +270,7 @@ class DragoPMBLMod(loader.Module):
             await self._client(BlockRequest(id=d))
             await self._client(DeleteHistoryRequest(peer=d, just_clear=True, max_id=0))
 
-        await utils.answer(message, self.strings("removed").format(len(to_ban)))
+        await self._reply(message, self._s("removed", n=len(to_ban)))
 
     def _approve(self, user: int, reason: str = "unknown"):
         self._whitelist += [user]
@@ -223,13 +294,14 @@ class DragoPMBLMod(loader.Module):
         if not user:
             chat = await message.get_chat()
             if not isinstance(chat, User):
-                await utils.answer(message, self.strings("user_not_specified"))
+                await self._reply(message, self._s("user_not_specified"))
                 return
             user = chat
 
         self._approve(user.id, "manual_approve")
-        await utils.answer(
-            message, self.strings("approved").format(user.id, get_display_name(user))
+        await self._reply(
+            message,
+            self._s("approved", uid=user.id, name=utils.escape_html(get_display_name(user))),
         )
 
     @loader.watcher()
@@ -264,7 +336,7 @@ class DragoPMBLMod(loader.Module):
         )
 
         dialog = None
-        notify_text = self.config["custom_message"] or self.strings("banned")
+        notify_text = self.config["custom_message"] or self._s("banned")
 
         if len(self._ratelimit) < self._ratelimit_threshold:
             if not self.config["silent"]:
@@ -285,41 +357,43 @@ class DragoPMBLMod(loader.Module):
             with contextlib.suppress(ValueError):
                 dialog = await self._client.get_entity(message.peer_id)
 
-        await self.inline.bot.send_message(
-            self._client.tg_id,
-            self.strings("banned_log").format(
-                dialog.id if dialog is not None else message.sender_id,
-                (
-                    utils.escape_html(dialog.first_name)
-                    if dialog is not None
-                    else (
-                        getattr(getattr(message, "sender", None), "username", None)
-                        or message.sender_id
-                    )
-                ),
-                _yn(self.config["report_spam"]),
-                _yn(self.config["delete_dialog"]),
-                utils.escape_html(
-                    "<стикер>"
-                    if message.sticker
-                    else (
-                        "<фото>"
-                        if message.photo
-                        else (
-                            "<видео>"
-                            if message.video
-                            else (
-                                "<файл>"
-                                if message.document
-                                else message.raw_text[:3000]
-                            )
-                        )
-                    )
-                ),
-            ),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
+        log_name = (
+            utils.escape_html(dialog.first_name)
+            if dialog is not None
+            else (
+                getattr(getattr(message, "sender", None), "username", None)
+                or message.sender_id
+            )
         )
+        log_body = utils.escape_html(
+            "<стикер>"
+            if message.sticker
+            else (
+                "<фото>"
+                if message.photo
+                else (
+                    "<видео>"
+                    if message.video
+                    else "<файл>" if message.document else message.raw_text[:3000]
+                )
+            )
+        )
+        with contextlib.suppress(Exception):
+            await self.inline.bot.send_message(
+                self._client.tg_id,
+                _to_bot_emoji(
+                    self._s(
+                        "banned_log",
+                        uid=dialog.id if dialog is not None else message.sender_id,
+                        name=log_name,
+                        rep=_yn(self.config["report_spam"]),
+                        dele=_yn(self.config["delete_dialog"]),
+                        text=log_body,
+                    )
+                ),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
 
         await self._client(BlockRequest(id=message.sender_id))
 
