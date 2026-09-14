@@ -1,4 +1,4 @@
-__version__ = (1, 3, 0)
+__version__ = (1, 3, 1)
 
 # meta developer: @dragomodules
 # meta category: Безопасность
@@ -6,7 +6,7 @@ __version__ = (1, 3, 0)
 # meta banner: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/assets/DragoPMBL.jpg
 # scope: heroku_only
 # requires: telethon
-# changelog: команды для тестов — .dpmforget (сброс+разбан), .dpmreset (очистить память), .dpmwl (список)
+# changelog: картинка «Ты заблокирован» дефолтом в config.photo (шлётся забаненному с текстом)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPMBL — страж лички. Банит и репортит незнакомцев,      ║
@@ -133,8 +133,8 @@ class DragoPMBLMod(loader.Module):
             ),
             loader.ConfigValue(
                 "photo",
-                "",
-                lambda: "Картинка к уведомлению о бане. Пусто — только текст.",
+                "https://raw.githubusercontent.com/firedragoq/heroku-modules/main/assets/DragoPMBL_ban.jpg",
+                lambda: "Картинка к уведомлению о бане (шлётся забаненному с текстом). Пусто — только текст.",
                 validator=loader.validators.String(),
             ),
             loader.ConfigValue(
