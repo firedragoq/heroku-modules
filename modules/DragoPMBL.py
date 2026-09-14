@@ -1,4 +1,4 @@
-__version__ = (1, 4, 1)
+__version__ = (1, 4, 2)
 
 # meta developer: @dragomodules
 # meta category: Безопасность
@@ -6,7 +6,7 @@ __version__ = (1, 4, 1)
 # meta banner: https://raw.githubusercontent.com/firedragoq/heroku-modules/main/assets/DragoPMBL.jpg
 # scope: heroku_only
 # requires: telethon
-# changelog: команда одобрения .dpmallow теперь сама снимает из ЧС (разбан) при одобрении
+# changelog: убраны команды .dpmforget и .dpmwl (память чистится через .dpmreset)
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  DragoPMBL — страж лички. Банит и репортит незнакомцев,      ║
@@ -80,13 +80,7 @@ class DragoPMBLMod(loader.Module):
             '{ok} <b><a href="tg://user?id={uid}">{name}</a> одобрен:</b> '
             "снят из ЧС и впущен в ЛС."
         ),
-        "forgotten": (
-            '{ok} <b><a href="tg://user?id={uid}">{name}</a> забыт:</b> убран из памяти '
-            "и разблокирован. Можно писать заново для теста."
-        ),
         "reset": "{ok} <b>Память очищена.</b> Забыл записей: <b>{n}</b>.",
-        "wl_empty": "{shield} <b>Память пуста</b> — никто ещё не обработан.",
-        "wl_list": "{shield} <b>В памяти записей: {n}</b>\n{rows}",
         "banned_log": (
             '{ban} <b>Заблокировал <a href="tg://user?id={uid}">{name}</a>.</b>\n\n'
             "<b>{rep} Репорт спама</b>\n<b>{dele} Удалён диалог</b>\n\n"
@@ -99,9 +93,7 @@ class DragoPMBLMod(loader.Module):
         "dpmcmd_doc": "включить или выключить защиту",
         "dpmlastcmd_doc": "<N> — забанить и снести N последних диалогов",
         "dpmallowcmd_doc": "<реплай/юзер> — впустить пользователя в ЛС",
-        "dpmforgetcmd_doc": "<реплай/id/@> — убрать из памяти и разбанить (для теста)",
         "dpmresetcmd_doc": "очистить всю память (вайтлист)",
-        "dpmwlcmd_doc": "показать память (вайтлист)",
     }
 
     def __init__(self):
@@ -327,44 +319,12 @@ class DragoPMBLMod(loader.Module):
             self._s("approved", uid=user.id, name=utils.escape_html(get_display_name(user))),
         )
 
-    @loader.command(
-        ru_doc="<реплай/id/@> — убрать из памяти и разбанить (для теста)", alias="dpmunwl"
-    )
-    async def dpmforgetcmd(self, message: Message):
-        """<reply/id/@user> — remove from memory and unblock (for re-testing)"""
-        user = await self._resolve_user(message)
-        if user is None:
-            await self._reply(message, self._s("user_not_specified"))
-            return
-
-        self._set_whitelist([u for u in self._whitelist if u != user.id])
-        with contextlib.suppress(Exception):
-            await self._client(UnblockRequest(id=user.id))
-
-        await self._reply(
-            message,
-            self._s("forgotten", uid=user.id, name=utils.escape_html(get_display_name(user))),
-        )
-
     @loader.command(ru_doc="очистить всю память (вайтлист)", alias="dpmclear")
     async def dpmresetcmd(self, message: Message):
         """clear the whole whitelist memory"""
         count = len(self._whitelist)
         self._set_whitelist([])
         await self._reply(message, self._s("reset", n=count))
-
-    @loader.command(ru_doc="показать память (вайтлист)", alias="dpmlist")
-    async def dpmwlcmd(self, message: Message):
-        """show the whitelist memory"""
-        wl = list(self._whitelist)
-        if not wl:
-            await self._reply(message, self._s("wl_empty"))
-            return
-
-        rows = "\n".join(f"• <code>{uid}</code>" for uid in wl[:100])
-        if len(wl) > 100:
-            rows += f"\n… и ещё {len(wl) - 100}"
-        await self._reply(message, self._s("wl_list", n=len(wl), rows=rows))
 
     @loader.watcher()
     async def watcher(self, message: Message):
