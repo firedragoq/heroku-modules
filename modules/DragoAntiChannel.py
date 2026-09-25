@@ -1,16 +1,16 @@
-__version__ = (1, 0, 0)
+__version__ = (1, 1, 0)
 
 # meta developer: @dragomodules
 # meta category: Модерация
 # scope: heroku_only
 # requires: telethon
-# changelog: первый релиз — удаление сообщений «от имени канала» в выбранных чатах
+# changelog: фильтр по никам (.acname) — удаляет сообщения юзеров со спам-ником, пока не сменят
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  DragoAntiChannel — чистит сообщения, отправленные «как канал» ║
-# ║  (Send as channel), в указанных чатах. Реклама-каналы мимо.    ║
-# ║  .acwatch — следить за чатом · .acchats — список ·             ║
-# ║  .acwl — белый список каналов-исключений.                     ║
+# ║  DragoAntiChannel — чистит сообщения «от имени канала»       ║
+# ║  и юзеров со спам-ником в указанных чатах.                   ║
+# ║  .acwatch — следить · .acchats — список ·                    ║
+# ║  .acwl — белый список каналов · .acname — фильтр ников.      ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import asyncio
@@ -18,7 +18,7 @@ import logging
 
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import Message, PeerChannel
-from telethon.utils import get_peer_id
+from telethon.utils import get_display_name, get_peer_id
 
 from .. import loader, utils
 
@@ -34,7 +34,7 @@ PE_WARN = "<emoji document_id=5260644989758640758>⚠️</emoji>"
 
 @loader.tds
 class DragoAntiChannelMod(loader.Module):
-    """🔒 Удаляет сообщения, отправленные «от имени канала», в выбранных чатах."""
+    """🔒 Удаляет сообщения «от имени канала» и юзеров со спам-ником в выбранных чатах."""
 
     strings = {
         "name": "DragoAntiChannel",
@@ -58,13 +58,29 @@ class DragoAntiChannelMod(loader.Module):
         "wl_off": f"{PE_STOP} <b>Канал убран из белого списка.</b>\n<code>{{id}}</code>",
         "wl_list": f"{PE_OK} <b>Белый список ({{n}}):</b>\n{{rows}}",
         "deleted": f"{PE_STOP} <b>Удалил сообщение от имени канала</b> <i>{{name}}</i>",
+        "deleted_name": f"{PE_STOP} <b>Удалил сообщение</b> — ник <i>{{name}}</i> в фильтре.",
+        "name_list": f"{PE_LOCK} <b>Фильтр ников ({{n}}):</b>\n{{rows}}",
+        "name_empty": (
+            f"{PE_WARN} <b>Фильтр ников пуст.</b> Добавь слово: "
+            "<code>{p}acname физы</code> (или ответь на спамера командой <code>{p}acname</code>)."
+        ),
+        "name_added": (
+            f"{PE_OK} <b>Добавил в фильтр ников:</b> <code>{{phrase}}</code>\n"
+            "Сообщения с таким ником удаляю, пока не сменит."
+        ),
+        "name_exists": f"{PE_WARN} <b>Уже в фильтре:</b> <code>{{phrase}}</code>",
+        "name_removed": f"{PE_STOP} <b>Убрал из фильтра ников:</b> <code>{{phrase}}</code>",
+        "name_not_found": f"{PE_WARN} <b>Такого нет в фильтре:</b> <code>{{phrase}}</code>",
+        "name_need_arg": f"{PE_WARN} <b>Укажи слово:</b> <code>{{p}}acnamedel физы</code>",
     }
 
     strings_ru = {
-        "_cls_doc": "🔒 Удаляет сообщения, отправленные «от имени канала», в выбранных чатах.",
+        "_cls_doc": "🔒 Удаляет сообщения «от имени канала» и юзеров со спам-ником в выбранных чатах.",
         "acwatchcmd_doc": "вкл/выкл слежение за текущим чатом",
         "acchatscmd_doc": "список чатов под наблюдением",
         "acwlcmd_doc": "[реплай/ID] — добавить/убрать канал из белого списка",
+        "acnamecmd_doc": "[реплай/слово] — добавить слово в фильтр ников (без слова — список)",
+        "acnamedelcmd_doc": "<слово> — убрать слово из фильтра ников",
     }
 
     def __init__(self):
@@ -99,6 +115,18 @@ class DragoAntiChannelMod(loader.Module):
                 "Через сколько секунд убирать уведомление.",
                 validator=loader.validators.Integer(minimum=2, maximum=60),
             ),
+            loader.ConfigValue(
+                "filter_names",
+                True,
+                "Фильтр по никам: удалять сообщения юзеров со спам-словом в нике.",
+                validator=loader.validators.Boolean(),
+            ),
+            loader.ConfigValue(
+                "name_filters",
+                [],
+                "Слова-фильтры для ников (регистр не важен). Правится тут или командой .acname.",
+                validator=loader.validators.Series(validator=loader.validators.String()),
+            ),
         )
         self._linked_cache: dict = {}
 
@@ -120,15 +148,32 @@ class DragoAntiChannelMod(loader.Module):
         self._linked_cache[key] = linked
         return linked
 
-    async def _notify_delete(self, chat_id: int, name: str):
+    async def _notify_delete(self, chat_id: int, text: str):
         try:
-            note = await self._client.send_message(
-                chat_id, self.strings("deleted").format(name=utils.escape_html(name))
-            )
+            note = await self._client.send_message(chat_id, text)
             await asyncio.sleep(int(self.config["notify_ttl"]))
             await note.delete()
         except Exception:  # noqa: BLE001
             pass
+
+    async def _punish(self, message: Message, chat_id: int, kind: str):
+        """Удаляет сообщение (если delete вкл) + счётчик + опциональное уведомление."""
+        if not self.config["delete"]:
+            logger.info("DragoAntiChannel: совпадение (%s) в чате %s, delete=off", kind, chat_id)
+            return
+        await message.delete()
+        self.set("deleted_count", int(self.get("deleted_count", 0)) + 1)
+        if not self.config["notify"]:
+            return
+        try:
+            sender = await message.get_sender()
+            name = self._title(sender) if kind == "channel" else (get_display_name(sender) or "?")
+        except Exception:  # noqa: BLE001
+            name = "?"
+        key = "deleted" if kind == "channel" else "deleted_name"
+        asyncio.create_task(
+            self._notify_delete(chat_id, self.strings(key).format(name=utils.escape_html(name)))
+        )
 
     @staticmethod
     def _title(entity) -> str:
@@ -211,17 +256,80 @@ class DragoAntiChannelMod(loader.Module):
         self.set("whitelist", wl)
         await utils.answer(message, self.strings("wl_on").format(id=target))
 
+    @loader.command(ru_doc="[реплай/слово] — добавить слово в фильтр ников (без слова — список)")
+    async def acnamecmd(self, message):
+        """[reply/word] — add a word to the nickname filter (no arg — list)"""
+        phrase = (utils.get_args_raw(message) or "").strip()
+        if not phrase:
+            reply = await message.get_reply_message()
+            if reply is not None:
+                sender = await reply.get_sender()
+                if sender is not None:
+                    phrase = (get_display_name(sender) or "").strip()
+        phrase = phrase.lower()
+
+        filters = list(self.config["name_filters"])
+        if not phrase:
+            if not filters:
+                return await utils.answer(
+                    message, self.strings("name_empty").format(p=self.get_prefix())
+                )
+            rows = "\n".join(
+                f"{PE_LINK} <code>{utils.escape_html(f)}</code>" for f in filters
+            )
+            return await utils.answer(
+                message, self.strings("name_list").format(n=len(filters), rows=rows)
+            )
+
+        if phrase in filters:
+            return await utils.answer(
+                message, self.strings("name_exists").format(phrase=utils.escape_html(phrase))
+            )
+        filters.append(phrase)
+        self.config["name_filters"] = filters
+        await utils.answer(
+            message, self.strings("name_added").format(phrase=utils.escape_html(phrase))
+        )
+
+    @loader.command(ru_doc="<слово> — убрать слово из фильтра ников")
+    async def acnamedelcmd(self, message):
+        """<word> — remove a word from the nickname filter"""
+        phrase = (utils.get_args_raw(message) or "").strip().lower()
+        if not phrase:
+            return await utils.answer(
+                message, self.strings("name_need_arg").format(p=self.get_prefix())
+            )
+        filters = list(self.config["name_filters"])
+        if phrase not in filters:
+            return await utils.answer(
+                message, self.strings("name_not_found").format(phrase=utils.escape_html(phrase))
+            )
+        filters.remove(phrase)
+        self.config["name_filters"] = filters
+        await utils.answer(
+            message, self.strings("name_removed").format(phrase=utils.escape_html(phrase))
+        )
+
     # ── watcher ──────────────────────────────────────────────────────────
 
     @loader.watcher()
     async def watcher(self, message: Message):
         try:
-            from_id = getattr(message, "from_id", None)
-            if not isinstance(from_id, PeerChannel):
-                return  # обычный пользователь — не наш случай
-
             chat_id = utils.get_chat_id(message)
             if chat_id not in self.get("chats", []):
+                return
+
+            # 1) фильтр по никам (любой пользователь, кроме себя)
+            if (
+                self.config["filter_names"]
+                and not getattr(message, "out", False)
+                and await self._name_hit(message)
+            ):
+                return await self._punish(message, chat_id, "name")
+
+            # 2) сообщения «от имени канала»
+            from_id = getattr(message, "from_id", None)
+            if not isinstance(from_id, PeerChannel):
                 return
 
             sender_id = message.sender_id
@@ -238,17 +346,25 @@ class DragoAntiChannelMod(loader.Module):
                 if sender_id == await self._linked_id(chat):
                     return
 
-            if not self.config["delete"]:
-                logger.info("DragoAntiChannel: канал %s в чате %s (delete=off)", sender_id, chat_id)
-                return
-
-            await message.delete()
-            self.set("deleted_count", int(self.get("deleted_count", 0)) + 1)
-
-            if self.config["notify"]:
-                sender = await message.get_sender()
-                asyncio.create_task(
-                    self._notify_delete(chat_id, self._title(sender))
-                )
+            await self._punish(message, chat_id, "channel")
         except Exception as exc:  # noqa: BLE001 — вотчер не должен падать
             logger.debug("DragoAntiChannel watcher error: %s", exc)
+
+    async def _name_hit(self, message: Message) -> bool:
+        """True, если ник отправителя содержит слово из фильтра."""
+        filters = self.config["name_filters"]
+        if not filters:
+            return False
+        try:
+            sender = await message.get_sender()
+        except Exception:  # noqa: BLE001
+            return False
+        if sender is None:
+            return False
+        sid = getattr(sender, "id", None)
+        if sid == self._tg_id or sid in self.get("whitelist", []):
+            return False
+        name = (get_display_name(sender) or "").lower()
+        if not name:
+            return False
+        return any(f in name for f in filters)
